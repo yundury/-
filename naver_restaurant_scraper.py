@@ -166,28 +166,32 @@ def _parse_review_count(text):
 def _parse_ai_briefing(text, max_items=2):
     """'AI 요약'/'AI 브리핑' 라벨 주변의 짧은 소개 문구를 최대 max_items개까지 가져온다.
 
-    네이버 플레이스에서 이 라벨이 정확히 어떤 형태/위치로 나오는지 아직 확실하지 않아서,
-    라벨 앞뒤 글자를 함께 돌려주고(디버그용), 그 중 그럴듯한 쪽을 문구로 사용한다.
+    'AI 브리핑' 아래에는 보통 요약 문장이 몇 개 나오고, 문장마다 끝에
+    '닉네임 +2' 같은 출처 표시가 붙는다. 그 표시를 기준으로 문장 단위를 나눈다.
     """
-    match = re.search(r"AI\s*(?:요약|브리핑)", text)
+    match = re.search(r"AI\s*브리핑", text)
     if not match:
-        return None, None
+        return None, "'AI 브리핑' 글자를 페이지에서 못 찾았습니다 (스크롤해도 안 나타났을 수 있음)."
 
-    context_before = text[max(0, match.start() - 300):match.start()].strip()
-    context_after = text[match.end():match.end() + 300].strip()
-    debug_context = f"라벨 앞 300자: {context_before!r}\n라벨 뒤 300자: {context_after!r}"
+    section = text[match.end():match.end() + 1500]
+    debug_context = f"'AI 브리핑' 뒤 1500자: {section!r}"
 
-    before_items = [c.strip() for c in re.split(r"[\n·]", context_before) if c.strip()]
-    after_items = [c.strip() for c in re.split(r"[\n·]", context_after) if c.strip()]
+    # '실험 단계로 정확하지 않을 수 있어요' / '~정리한 정보는 다음과 같습니다' 같은
+    # 고정 안내 문구는 실제 요약 내용이 아니므로 제거하고 시작한다.
+    section = re.sub(r".*?정리한 정보는 다음과 같습니다\.?", "", section, count=1, flags=re.S)
 
-    if before_items:
-        description = " / ".join(before_items[-max_items:])
-    elif after_items:
-        description = " / ".join(after_items[:max_items])
-    else:
-        description = None
+    # 각 요약 문장은 보통 끝에 '닉네임 +숫자' 형태의 출처 표시가 붙는다.
+    bullets = re.findall(r"(.+?)\s*\S+\s*\+\d+", section, flags=re.S)
+    bullets = [b.replace("\n", " ").strip() for b in bullets if b.strip()]
 
-    return description, debug_context
+    if not bullets:
+        # 출처 표시를 못 찾으면, 줄바꿈 기준으로 대충이라도 나눠본다
+        bullets = [b.strip() for b in section.split("\n") if b.strip()]
+
+    if not bullets:
+        return None, debug_context
+
+    return " / ".join(bullets[:max_items]), debug_context
 
 
 def _wait_for_list_or_entry(page, timeout_ms=15000, poll_ms=300):
@@ -234,6 +238,16 @@ def _try_get_place_details(page, name):
         entry_frame = page.frame_locator("#entryIframe")
         # 상세 페이지(entryIframe)도 내용이 다 그려질 때까지 넉넉하게 기다린다.
         body_text = entry_frame.locator("body").inner_text(timeout=15000)
+
+        # 'AI 브리핑'은 스크롤을 어느 정도 내려야 나타나는 지연 로딩 영역이라,
+        # 왼쪽 정보 패널 위에서 마우스 휠을 내리면서 나타날 때까지 기다린다.
+        page.mouse.move(220, 400)
+        for _ in range(6):
+            if "브리핑" in body_text:
+                break
+            page.mouse.wheel(0, 1200)
+            page.wait_for_timeout(500)
+            body_text = entry_frame.locator("body").inner_text(timeout=5000)
     except Exception as e:
         frame_names = [f.name or "(이름없음)" for f in page.frames]
 
