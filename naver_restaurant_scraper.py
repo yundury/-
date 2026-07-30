@@ -99,24 +99,42 @@ def _parse_review_count(text):
     return int(value)
 
 
+def _wait_for_list_or_entry(page, timeout_ms=15000, poll_ms=300):
+    """검색 후 '목록'이 뜨는지, 검색결과가 하나뿐이라 '상세 페이지'로 바로
+    넘어가는지는 미리 알 수 없다. 고정 시간을 기다리는 대신, 둘 중 무엇이
+    먼저 나타나는지 짧은 간격으로 계속 확인해서 그때그때 판단한다.
+
+    반환값: "list" | "entry" | "timeout"
+    """
+    elapsed = 0
+    while elapsed < timeout_ms:
+        if page.frame_locator("#searchIframe").locator("li").first.is_visible():
+            return "list"
+        if page.frame_locator("#entryIframe").locator("body").is_visible():
+            return "entry"
+        page.wait_for_timeout(poll_ms)
+        elapsed += poll_ms
+    return "timeout"
+
+
 def _try_get_review_count(page, name):
-    """실제로 검색 -> 목록 클릭 -> 상세 페이지 읽기를 한 번 시도한다."""
+    """실제로 검색 -> (필요하면) 목록 클릭 -> 상세 페이지 읽기를 한 번 시도한다."""
     # 주소 전체를 검색어로 쓰면 실제 사람이 잘 안 쓰는 특이한 검색어라 자동화로
     # 의심받기 쉬워서, 가게이름 + 지역구 정도로 짧고 자연스러운 검색어를 사용한다.
     query = quote(f"{name} {config.DISTRICT}")
     page.goto(f"https://map.naver.com/p/search/{query}", timeout=30000)
 
-    try:
-        search_frame = page.frame_locator("#searchIframe")
-        # 고정된 시간만큼 기다리는 대신, 목록의 첫 항목이 실제로 화면에 나타날 때까지 기다린다.
-        # (검색 결과 목록이 늦게 뜰 때 너무 일찍 클릭해서 꼬이는 문제를 막기 위함)
-        search_frame.locator("li").first.wait_for(state="visible", timeout=15000)
-        # 검색 결과 목록에서 가게 이름이 포함된 첫 번째 항목 클릭
-        search_frame.locator("li").filter(has_text=name).first.click(timeout=15000)
-        page.wait_for_timeout(2500)
-    except Exception:
-        # 검색 결과가 1건이라 목록 없이 바로 상세 페이지로 들어간 경우일 수 있음
-        pass
+    # 이름이 비슷한 가게가 여러 곳이면 '목록'이 뜨고, 검색결과가 하나뿐이면
+    # 목록 없이 바로 '상세 페이지'로 넘어간다. 어느 쪽인지 지켜보다가
+    # 목록이 뜬 경우에만 첫 번째 항목을 클릭한다.
+    state = _wait_for_list_or_entry(page)
+    if state == "list":
+        try:
+            search_frame = page.frame_locator("#searchIframe")
+            search_frame.locator("li").filter(has_text=name).first.click(timeout=15000)
+            page.wait_for_timeout(2500)
+        except Exception:
+            pass
 
     try:
         entry_frame = page.frame_locator("#entryIframe")
