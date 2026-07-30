@@ -103,13 +103,45 @@ def _extract_review_snippet(lines):
     return pool[-1]
 
 
+_CITY_NAMES = (
+    "서울", "부산", "대구", "인천", "광주", "대전", "울산", "세종",
+    "경기", "강원", "충북", "충남", "전북", "전남", "경북", "경남", "제주",
+)
+_ADDRESS_PATTERN = re.compile(r"(?:" + "|".join(_CITY_NAMES) + r")[^\n·]{0,15}")
+
+
+def _extract_address_from_list(text):
+    """목록 카드 텍스트에서 '서울 은평구 응암동' 같은 동네 이름을 찾는다.
+
+    카드에 '영업 중 · 리뷰 3,024 · 서울 은평구 응암동'처럼 시/도 이름부터
+    나오는 경우가 있어, 그 패턴을 찾아 구 단위까지만 남긴다.
+    """
+    match = _ADDRESS_PATTERN.search(text)
+    return _district_only(match.group(0).strip()) if match else ""
+
+
+def _extract_category_from_list(lines):
+    """목록 카드의 둘째 줄이 짧은 태그 형태면 카테고리로 추정한다.
+
+    이름 바로 다음 줄이 '이자카야', '샤브샤브'처럼 짧고 공백/동네이름이 없으면
+    카테고리 태그로 보고, 아니라면(광고 문구 등) 빈 값으로 둔다. 확실하지 않은
+    추정이라 틀릴 수 있다.
+    """
+    if len(lines) < 2:
+        return ""
+    candidate = lines[1]
+    if len(candidate) <= 8 and " " not in candidate and "동" not in candidate:
+        return candidate
+    return ""
+
+
 def _parse_list_item(text):
     """검색 결과 '목록'에 나오는 항목 하나의 텍스트에서 정보를 뽑아낸다.
 
     목록의 각 항목은 보통 첫 줄이 가게 이름이고, 어딘가에 '리뷰 N' 형태로
     리뷰 수가 나온다. 리뷰 수가 없는 항목(광고/필터 칩 등)은 걸러진다.
 
-    반환값: {"가게이름":..., "리뷰수":..., "브랜드설명":...} 또는 None
+    반환값: {"가게이름", "리뷰수", "브랜드설명", "카테고리", "주소"} 또는 None
     """
     review_count = _parse_review_count(text)
     if review_count is None:
@@ -127,7 +159,23 @@ def _parse_list_item(text):
         "가게이름": name,
         "리뷰수": review_count,
         "브랜드설명": _extract_review_snippet(lines),
+        "카테고리": _extract_category_from_list(lines),
+        "주소": _extract_address_from_list(text),
     }
+
+
+def _extract_map_url(item_locator):
+    """목록 항목을 감싸거나 포함하는 <a> 태그의 실제 링크(href)를 가져온다.
+
+    상세 페이지에 따로 들어가지 않고, 목록에 이미 걸려있는 링크를 그대로 쓴다.
+    """
+    try:
+        href = item_locator.evaluate(
+            "el => { const a = el.closest('a') || el.querySelector('a'); return a ? a.href : ''; }"
+        )
+        return href or ""
+    except Exception:
+        return ""
 
 
 def _extract_name_and_category(body_text):
@@ -204,18 +252,28 @@ def _wait_for_list_or_entry(page, timeout_ms=15000, poll_ms=300):
     return "timeout"
 
 
-def _current_list_item_texts(search_frame):
-    """지금 화면에 있는 목록 항목들 중 '리뷰'가 포함된 것만 텍스트로 가져온다."""
+def _current_list_rows(search_frame):
+    """지금 화면에 있는 목록 항목들 중 '리뷰'가 포함된 것만 정보를 뽑아서 가져온다.
+
+    (화면 밖으로 스크롤되면 항목이 DOM에서 사라지는 경우가 있어서, 스크롤하며
+    보일 때마다 그때그때 뽑아둬야 한다. 나중에 한꺼번에 훑으면 이미 사라진
+    항목의 정보를 놓칠 수 있다.)
+    """
     items = search_frame.locator("li").all()
-    texts = []
+    rows = []
     for it in items:
         try:
-            t = it.inner_text(timeout=2000)
+            text = it.inner_text(timeout=2000)
         except Exception:
             continue
-        if "리뷰" in t:
-            texts.append(t)
-    return texts
+        if "리뷰" not in text:
+            continue
+        parsed = _parse_list_item(text)
+        if not parsed:
+            continue
+        parsed["네이버지도 주소"] = _extract_map_url(it)
+        rows.append(parsed)
+    return rows
 
 
 def _go_to_next_page(search_frame):
@@ -257,9 +315,13 @@ def _hover_over_list(page, search_frame):
     page.mouse.move(200, 500)
 
 
-def _scroll_current_page(page, search_frame, max_scrolls=25, stable_limit=3):
+def _scroll_current_page(page, search_frame, max_scrolls=25, stable_limit=4):
     """한 페이지 안에서는 무한 스크롤로 계속 더 불러와진다. 더 이상 새 항목이
     안 늘어날 때까지(또는 max_scrolls번 스크롤할 때까지) 마우스 휠로 내리면서 모은다.
+
+    가게 카드가 화면에 로딩되는 데 시간이 좀 걸려서, 스크롤을 조금씩 여러 번
+    내리고 매번 넉넉히 기다린 뒤 다시 확인한다 (너무 빨리 "더 이상 안 늘어난다"고
+    판단하면 아직 로딩 중인 걸 놓칠 수 있다).
 
     마우스 위치는 스크롤을 시작하기 전, 목록이 아직 그대로일 때 딱 한 번만 계산해서
     고정한다. 스크롤 도중에 다시 계산하면 화면 밖으로 스크롤된 항목의 좌표를 잘못
@@ -267,23 +329,28 @@ def _scroll_current_page(page, search_frame, max_scrolls=25, stable_limit=3):
     """
     _hover_over_list(page, search_frame)
 
-    texts = _current_list_item_texts(search_frame)
+    collected = {}
+
+    def _merge_current():
+        for row in _current_list_rows(search_frame):
+            collected.setdefault(row["가게이름"], row)
+
+    _merge_current()
     stable_rounds = 0
     for _ in range(max_scrolls):
-        page.mouse.wheel(0, 2000)
-        page.wait_for_timeout(700)
-        new_texts = _current_list_item_texts(search_frame)
+        page.mouse.wheel(0, 1500)
+        page.wait_for_timeout(1200)  # 새 카드가 로딩될 시간을 넉넉히 준다
+        prev_count = len(collected)
+        _merge_current()
 
-        if len(new_texts) <= len(texts):
+        if len(collected) <= prev_count:
             stable_rounds += 1
             if stable_rounds >= stable_limit:
                 break
         else:
             stable_rounds = 0
 
-        texts = new_texts
-
-    return texts
+    return list(collected.values())
 
 
 def _collect_list_items_across_pages(page, max_pages):
@@ -292,13 +359,14 @@ def _collect_list_items_across_pages(page, max_pages):
     한 페이지를 끝까지 스크롤해서 다 모은 뒤, '다음 페이지' 버튼을 눌러가며 반복한다.
     """
     search_frame = page.frame_locator("#searchIframe")
-    all_texts = []
+    all_rows = {}
 
     for page_num in range(1, max_pages + 1):
         page.wait_for_timeout(800)  # 페이지 전환 후 목록이 그려질 시간을 준다
-        page_texts = _scroll_current_page(page, search_frame)
-        all_texts.extend(page_texts)
-        print(f"    {page_num}페이지: {len(page_texts)}개 항목")
+        page_rows = _scroll_current_page(page, search_frame)
+        for row in page_rows:
+            all_rows.setdefault(row["가게이름"], row)
+        print(f"    {page_num}페이지: {len(page_rows)}개 항목")
 
         if page_num < max_pages:
             moved = _go_to_next_page(search_frame)
@@ -307,7 +375,7 @@ def _collect_list_items_across_pages(page, max_pages):
                 break
             page.wait_for_timeout(1200)
 
-    return all_texts
+    return list(all_rows.values())
 
 
 def collect_candidates():
@@ -334,44 +402,47 @@ def collect_candidates():
                     entry_frame = page.frame_locator("#entryIframe")
                     body_text = entry_frame.locator("body").inner_text(timeout=10000)
                     review_count = _parse_review_count(body_text)
-                    name, _ = _extract_name_and_category(body_text)
+                    name, category = _extract_name_and_category(body_text)
+                    address = _district_only(_extract_address(body_text))
                     if review_count is not None and review_count >= config.MIN_REVIEW_COUNT and name:
-                        candidates.setdefault(
-                            name, {"가게이름": name, "상품군": group, "리뷰수": review_count, "브랜드설명": ""}
-                        )
+                        candidates.setdefault(name, {
+                            "가게이름": name,
+                            "상품군": group,
+                            "카테고리": category,
+                            "주소": address,
+                            "네이버지도 주소": page.url,
+                            "리뷰수": review_count,
+                            "브랜드설명": "",
+                        })
                 except Exception as e:
                     print(f"  -> 상세 페이지를 읽지 못했습니다: {e}")
             elif state == "list":
-                item_texts = _collect_list_items_across_pages(page, max_pages=config.MAX_LIST_PAGES)
+                rows = _collect_list_items_across_pages(page, max_pages=config.MAX_LIST_PAGES)
 
                 if not debug_shown:
-                    print("  ---- (목록이 잘 읽히는지 확인용) 처음 3개 항목 원문 ----")
-                    for t in item_texts[:3]:
-                        print("  >>>", repr(t))
+                    print("  ---- (목록이 잘 읽히는지 확인용) 처음 3곳 추출 결과 ----")
+                    for row in rows[:3]:
+                        print("  >>>", {k: v for k, v in row.items()})
                     print("  --------------------------------------------------------")
+                    debug_shown = True
 
                 found_in_query = 0
-                debug_parsed_shown = 0
-                for text in item_texts:
-                    parsed = _parse_list_item(text)
-                    if not parsed:
+                for row in rows:
+                    if row["리뷰수"] < config.MIN_REVIEW_COUNT:
                         continue
-                    if parsed["리뷰수"] < config.MIN_REVIEW_COUNT:
-                        continue
-                    if not debug_shown and debug_parsed_shown < 3:
-                        print(f"  ---- (브랜드설명 추출 확인용) {parsed['가게이름']!r} -> {parsed['브랜드설명']!r}")
-                        debug_parsed_shown += 1
-                    name = parsed["가게이름"]
+                    name = row["가게이름"]
                     if name not in candidates:
                         candidates[name] = {
                             "가게이름": name,
                             "상품군": group,
-                            "리뷰수": parsed["리뷰수"],
-                            "브랜드설명": parsed["브랜드설명"],
+                            "카테고리": row["카테고리"],
+                            "주소": row["주소"],
+                            "네이버지도 주소": row["네이버지도 주소"],
+                            "리뷰수": row["리뷰수"],
+                            "브랜드설명": row["브랜드설명"],
                         }
                         found_in_query += 1
-                debug_shown = True
-                print(f"  -> 목록 {len(item_texts)}개 중 리뷰 {config.MIN_REVIEW_COUNT}개 이상 신규 {found_in_query}곳")
+                print(f"  -> 목록 {len(rows)}개 중 리뷰 {config.MIN_REVIEW_COUNT}개 이상 신규 {found_in_query}곳")
             else:
                 print("  -> 목록도 상세 페이지도 뜨지 않았습니다 (타임아웃). 건너뜁니다.")
 
@@ -541,55 +612,20 @@ def save_excel(rows, output_file):
 
 
 def main():
+    """가게이름/상품군/카테고리/주소/지도링크/리뷰수/브랜드설명을 전부 검색 목록
+    단계에서만 뽑아서 바로 엑셀로 저장한다. (개별 상세 페이지는 더 이상 방문하지
+    않는다 - 목록에 이미 필요한 정보가 다 있고, 하나씩 들어가면 훨씬 느려진다.
+    더 정확한 정보가 필요하면 get_extra_info()를 다시 불러 쓸 수 있다.)
+    """
     candidates = collect_candidates()
     if not candidates:
-        print("검색된 가게가 없습니다. config.py의 검색 조건을 확인하세요.")
+        print(f"리뷰 {config.MIN_REVIEW_COUNT}개 이상인 가게가 없습니다. config.py의 검색 조건을 확인하세요.")
         return
 
-    print(f"1차로 찾은 (리뷰 {config.MIN_REVIEW_COUNT}개 이상) 후보: {len(candidates)}곳")
-
-    final_rows = []
-
-    with sync_playwright() as p:
-        context, page = _open_browser(p)
-
-        debug_shown = 0
-        for i, place in enumerate(candidates, 1):
-            print(f"[{i}/{len(candidates)}] 상세정보 확인 중: {place['가게이름']} (리뷰 {place['리뷰수']})")
-            try:
-                info, debug_info = get_extra_info(page, place["가게이름"])
-            except Exception as e:
-                info, debug_info = None, f"예외 발생: {e}"
-
-            if info is None:
-                print("  -> 상세정보를 찾지 못했습니다. 건너뜁니다.")
-                if debug_info and debug_shown < 2:
-                    print("  ========== 디버그 정보 (이 부분을 복사해서 보내주세요) ==========")
-                    print(debug_info)
-                    print("  =================================================================")
-                    debug_shown += 1
-                continue
-
-            final_rows.append({
-                "가게이름": place["가게이름"],
-                "상품군": place["상품군"],
-                "카테고리": info["카테고리"],
-                "주소": info["주소"],
-                "네이버지도 주소": info["네이버지도 주소"],
-                "리뷰수": place["리뷰수"],
-                "브랜드설명": place["브랜드설명"],
-            })
-
-            # 너무 빠르게 계속 요청하지 않도록 잠깐 대기
-            # (사이트에 부담을 주지 않고, 자동화로 의심받지 않기 위함)
-            time.sleep(random.uniform(3.0, 6.0))
-
-        context.close()
-
-    if not final_rows:
-        print(f"리뷰 {config.MIN_REVIEW_COUNT}개 이상인 가게가 없습니다.")
-        return
-
+    final_rows = [
+        {h: c.get(h, "") for h in HEADERS}
+        for c in candidates
+    ]
     final_rows.sort(key=lambda r: r["리뷰수"], reverse=True)
     save_excel(final_rows, config.OUTPUT_FILE)
     print(f"완료! {len(final_rows)}곳을 '{config.OUTPUT_FILE}' 파일로 저장했습니다.")
