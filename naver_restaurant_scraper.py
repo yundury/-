@@ -1,11 +1,12 @@
 """
 네이버 지도에서 지역+음식종류로 검색한 뒤, 검색 결과 목록을 스크롤해서 모으고
-(목록에 이미 나오는 리뷰 수/리뷰 글 한 줄로 1차 정보를 채운 다음), 살아남은
-가게만 상세 페이지에 들어가서 주소/카테고리/지도 링크까지 채워 엑셀로 저장하는 스크립트.
+가게이름/카테고리/리뷰수/브랜드설명/지도링크를 전부 그 목록 화면에서만 뽑아
+엑셀로 저장하는 스크립트. 개별 가게의 상세 페이지에는 들어가지 않는다
+(하나씩 들어가면 훨씬 느려지고, 목록에 이미 필요한 정보가 다 있다).
 
-'AI 브리핑'을 읽어오는 코드(_parse_ai_briefing)는 남겨두었지만 기본 흐름에서는
-쓰지 않는다. 상세 페이지에서 AI 브리핑이 뜰 때까지 스크롤/대기하는 과정이 가게당
-몇 초씩 더 걸려서, 대신 목록에 이미 나와 있는 리뷰 글 한 줄을 '브랜드설명'으로 쓴다.
+상세 페이지에 들어가서 정보를 읽는 코드(_try_get_extra_info, get_extra_info,
+_parse_ai_briefing 등)는 남겨두었지만 기본 흐름에서는 쓰지 않는다. 필요하면
+나중에 다시 불러 쓸 수 있다.
 
 네이버 지역검색 API는 더 이상 쓰지 않는다 (검색어당 5개 제한이 있고, 어차피
 목록 화면에 리뷰 수가 그대로 보이기 때문). API 키도 필요 없다.
@@ -34,7 +35,7 @@ import config
 PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browser_profile")
 
 # 최종 엑셀 컬럼 순서
-HEADERS = ["가게이름", "상품군", "카테고리", "주소", "네이버지도 주소", "리뷰수", "브랜드설명"]
+HEADERS = ["가게이름", "상품군", "카테고리", "네이버지도 주소", "리뷰수", "브랜드설명"]
 
 # 엑셀 서식에 쓸 값들
 FONT_NAME = "나눔바른고딕"
@@ -68,7 +69,7 @@ def _parse_review_count(text):
 
 # 가게 이름 뒤에 공백 없이 바로 붙어 나올 수 있는 '예약/톡톡/쿠폰' 같은 배지 글자들.
 # 목록 항목 첫 줄에서 이런 배지가 이름에 섞여 나오면 뒤에서부터 잘라낸다.
-_KNOWN_BADGE_WORDS = ["예약", "톡톡", "쿠폰", "포장주문", "발견"]
+_KNOWN_BADGE_WORDS = ["예약", "톡톡", "쿠폰", "포장주문", "발견", "광고"]
 
 
 def _strip_trailing_badges(name):
@@ -94,7 +95,10 @@ def _extract_review_snippet(lines):
     배지/리뷰수 같은 '구조적인' 줄들을 제외하고 남는 자유 문장 중, 말줄임표(...)로
     끝나지 않는(=안 잘린) 문장을 우선으로 마지막(카드 아래쪽에 가까운) 것을 고른다.
     """
-    candidates = [l for l in lines if len(l) >= 8 and not any(h in l for h in _STRUCTURAL_HINTS)]
+    # lines[0]은 가게 이름이라 리뷰 후보에서 제외한다.
+    candidates = [
+        l for l in lines[1:] if len(l) >= 8 and not any(h in l for h in _STRUCTURAL_HINTS)
+    ]
     if not candidates:
         return ""
 
@@ -103,35 +107,27 @@ def _extract_review_snippet(lines):
     return pool[-1]
 
 
-_CITY_NAMES = (
-    "서울", "부산", "대구", "인천", "광주", "대전", "울산", "세종",
-    "경기", "강원", "충북", "충남", "전북", "전남", "경북", "경남", "제주",
-)
-_ADDRESS_PATTERN = re.compile(r"(?:" + "|".join(_CITY_NAMES) + r")[^\n·]{0,15}")
-
-
-def _extract_address_from_list(text):
-    """목록 카드 텍스트에서 '서울 은평구 응암동' 같은 동네 이름을 찾는다.
-
-    카드에 '영업 중 · 리뷰 3,024 · 서울 은평구 응암동'처럼 시/도 이름부터
-    나오는 경우가 있어, 그 패턴을 찾아 구 단위까지만 남긴다.
-    """
-    match = _ADDRESS_PATTERN.search(text)
-    return _district_only(match.group(0).strip()) if match else ""
+# 카테고리 후보 줄에서 걸러야 할, 배지/홍보 문구로 확인된 단어들.
+# ("예약", "광고" 같은 배지가 이름과 같은 줄이 아니라 자기 혼자 줄로 나오는
+#  경우가 있어서, 카테고리인 줄 알고 잘못 주워온 적이 있었다)
+_CATEGORY_SKIP_WORDS = _KNOWN_BADGE_WORDS + ["광고", "place+", "새로오픈"]
+_CATEGORY_PROMO_HINTS = ("쿠폰", "증정", "할인", "제공", "이벤트", "무료", "%", "적립")
 
 
 def _extract_category_from_list(lines):
-    """목록 카드의 둘째 줄이 짧은 태그 형태면 카테고리로 추정한다.
+    """목록 카드에서 짧은 카테고리 태그로 보이는 줄을 찾는다.
 
-    이름 바로 다음 줄이 '이자카야', '샤브샤브'처럼 짧고 공백/동네이름이 없으면
-    카테고리 태그로 보고, 아니라면(광고 문구 등) 빈 값으로 둔다. 확실하지 않은
-    추정이라 틀릴 수 있다.
+    이름 다음 몇 줄 안에서, '예약'/'광고' 같은 배지 단어나 홍보 문구가 아니면서
+    짧고(8자 이하) 공백이 없는 줄을 카테고리로 본다. 확실하지 않은 추정이라
+    가게에 따라 비어있거나 틀릴 수 있다.
     """
-    if len(lines) < 2:
-        return ""
-    candidate = lines[1]
-    if len(candidate) <= 8 and " " not in candidate and "동" not in candidate:
-        return candidate
+    for line in lines[1:4]:
+        if line in _CATEGORY_SKIP_WORDS:
+            continue
+        if any(h in line for h in _CATEGORY_PROMO_HINTS):
+            continue
+        if len(line) <= 8 and " " not in line and "동" not in line:
+            return line
     return ""
 
 
@@ -141,7 +137,7 @@ def _parse_list_item(text):
     목록의 각 항목은 보통 첫 줄이 가게 이름이고, 어딘가에 '리뷰 N' 형태로
     리뷰 수가 나온다. 리뷰 수가 없는 항목(광고/필터 칩 등)은 걸러진다.
 
-    반환값: {"가게이름", "리뷰수", "브랜드설명", "카테고리", "주소"} 또는 None
+    반환값: {"가게이름", "리뷰수", "브랜드설명", "카테고리"} 또는 None
     """
     review_count = _parse_review_count(text)
     if review_count is None:
@@ -160,18 +156,30 @@ def _parse_list_item(text):
         "리뷰수": review_count,
         "브랜드설명": _extract_review_snippet(lines),
         "카테고리": _extract_category_from_list(lines),
-        "주소": _extract_address_from_list(text),
     }
 
 
+# 가게 상세 페이지 URL은 보통 '/restaurant/12345678' 또는 '/place/12345678'처럼
+# 숫자 ID가 붙은 형태다. 목록 카드 안에는 링크가 여러 개 있을 수 있어서(예: 목록
+# 검색으로 돌아가는 링크 등), 이 패턴에 맞는 것을 우선으로 고른다.
+_PLACE_URL_PATTERN = r"/(restaurant|place)/\d"
+
+
 def _extract_map_url(item_locator):
-    """목록 항목을 감싸거나 포함하는 <a> 태그의 실제 링크(href)를 가져온다.
+    """목록 항목 안에 있는 <a> 태그들 중, 가게 상세 페이지로 보이는 링크(href)를 가져온다.
 
     상세 페이지에 따로 들어가지 않고, 목록에 이미 걸려있는 링크를 그대로 쓴다.
     """
     try:
         href = item_locator.evaluate(
-            "el => { const a = el.closest('a') || el.querySelector('a'); return a ? a.href : ''; }"
+            """(el, pattern) => {
+                const re = new RegExp(pattern);
+                const anchors = [el.closest('a'), ...el.querySelectorAll('a')].filter(Boolean);
+                const match = anchors.find(a => re.test(a.href));
+                if (match) return match.href;
+                return anchors.length ? anchors[0].href : '';
+            }""",
+            _PLACE_URL_PATTERN,
         )
         return href or ""
     except Exception:
@@ -403,13 +411,11 @@ def collect_candidates():
                     body_text = entry_frame.locator("body").inner_text(timeout=10000)
                     review_count = _parse_review_count(body_text)
                     name, category = _extract_name_and_category(body_text)
-                    address = _district_only(_extract_address(body_text))
                     if review_count is not None and review_count >= config.MIN_REVIEW_COUNT and name:
                         candidates.setdefault(name, {
                             "가게이름": name,
                             "상품군": group,
                             "카테고리": category,
-                            "주소": address,
                             "네이버지도 주소": page.url,
                             "리뷰수": review_count,
                             "브랜드설명": "",
@@ -436,7 +442,6 @@ def collect_candidates():
                             "가게이름": name,
                             "상품군": group,
                             "카테고리": row["카테고리"],
-                            "주소": row["주소"],
                             "네이버지도 주소": row["네이버지도 주소"],
                             "리뷰수": row["리뷰수"],
                             "브랜드설명": row["브랜드설명"],
@@ -612,7 +617,7 @@ def save_excel(rows, output_file):
 
 
 def main():
-    """가게이름/상품군/카테고리/주소/지도링크/리뷰수/브랜드설명을 전부 검색 목록
+    """가게이름/상품군/카테고리/지도링크/리뷰수/브랜드설명을 전부 검색 목록
     단계에서만 뽑아서 바로 엑셀로 저장한다. (개별 상세 페이지는 더 이상 방문하지
     않는다 - 목록에 이미 필요한 정보가 다 있고, 하나씩 들어가면 훨씬 느려진다.
     더 정확한 정보가 필요하면 get_extra_info()를 다시 불러 쓸 수 있다.)
