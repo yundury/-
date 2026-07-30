@@ -288,10 +288,13 @@ def _current_list_rows(page, search_frame, min_reviews, visited):
 
         category, map_url = "", ""
         try:
-            # 카드 전체를 클릭하면(기본은 가운데를 클릭) 카드 안의 사진 영역을
-            # 눌러서 '홈'이 아니라 '사진' 탭으로 들어가버리는 문제가 있었다.
-            # 사진이 없는 카드 위쪽(이름이 있는 부분)을 짚어서 클릭한다.
-            it.click(position={"x": 10, "y": 10}, timeout=3000)
+            # 카드 아무 곳이나 클릭하면 사진 영역을 눌러서 '홈'이 아니라 '사진'
+            # 탭으로 들어가버리는 문제가 있었다. 파란색으로 표시되는 가게 이름
+            # 링크를 직접 찾아서 그것만 클릭한다.
+            try:
+                it.get_by_text(parsed["가게이름"], exact=False).first.click(timeout=3000)
+            except Exception:
+                it.click(position={"x": 10, "y": 10}, timeout=3000)  # 이름을 못 찾으면 예전 방식으로 대체
             page.wait_for_timeout(600)
             entry_frame = page.frame_locator("#entryIframe")
             # 혹시 그래도 '사진' 등 다른 탭으로 들어갔다면 '홈' 탭을 눌러 되돌아온다.
