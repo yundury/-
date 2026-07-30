@@ -1,10 +1,13 @@
 """
-네이버 지역검색 API로 특정 지역의 가게 목록을 모으고,
-각 가게의 네이버 플레이스(지도) 페이지에서 리뷰 개수/AI 브리핑을 가져온 뒤,
-리뷰 개수가 설정한 값 이상인 가게만 엑셀 파일로 저장하는 스크립트.
+네이버 지도에서 지역+음식종류로 검색한 뒤, 검색 결과 목록을 스크롤해서 모으고
+(목록에 이미 나오는 리뷰 수로 1차로 걸러낸 다음), 살아남은 가게만 상세 페이지에
+들어가서 주소/카테고리/AI 브리핑/지도 링크까지 채워 엑셀로 저장하는 스크립트.
+
+네이버 지역검색 API는 더 이상 쓰지 않는다 (검색어당 5개 제한이 있고, 어차피
+목록 화면에 리뷰 수가 그대로 보이기 때문). API 키도 필요 없다.
 
 실행 방법은 README.md를 참고하세요.
-모든 설정값(API 키, 지역, 찾을 음식 종류, 최소 리뷰 수 등)은 config.py에서 바꿉니다.
+모든 설정값(지역, 찾을 음식 종류, 최소 리뷰 수 등)은 config.py에서 바꿉니다.
 """
 
 import os
@@ -13,7 +16,6 @@ import time
 import random
 from urllib.parse import quote
 
-import requests
 from playwright.sync_api import sync_playwright
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
@@ -22,23 +24,10 @@ from openpyxl.utils import get_column_letter
 import config
 
 
-LOCAL_SEARCH_URL = "https://openapi.naver.com/v1/search/local.json"
-
 # 브라우저 로그인/쿠키 정보를 저장해두는 폴더.
 # 매번 새 브라우저(신규 방문자)인 것처럼 접속하면 네이버가 자동화로 의심하기 쉬워서,
 # 같은 브라우저 프로필을 계속 재사용해 "이전에도 왔던 사람"처럼 보이게 한다.
 PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browser_profile")
-
-# config.py의 PRODUCT_GROUPS에서 고른 상품군마다 지역검색에 같이 붙일 검색어.
-SEARCH_KEYWORDS_BY_GROUP = {
-    "한식": ["한식", "맛집"],
-    "중식": ["중식", "중국집"],
-    "일식": ["일식", "스시", "돈카츠"],
-    "양식": ["양식", "레스토랑"],
-    "에스닉": ["아시안음식", "베트남음식", "태국음식", "인도음식"],
-    "베이커리": ["베이커리", "빵집"],
-    "디저트": ["디저트", "카페"],
-}
 
 # 최종 엑셀 컬럼 순서
 HEADERS = ["가게이름", "상품군", "카테고리", "주소", "네이버지도 주소", "리뷰수", "브랜드설명"]
@@ -48,100 +37,10 @@ FONT_NAME = "나눔바른고딕"
 HEADER_FILL = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")
 
 
-def _classify_category(category_raw):
-    """네이버가 주는 카테고리 문자열(예: '한식>닭갈비', '음식점>한식>육류,고기요리>돼지고기구이')에서
-    상품군(한식/중식/양식/일식/에스닉/베이커리/디저트)과 세부 카테고리(닭갈비 등)를 뽑아낸다.
-    """
-    segments = [s.strip() for s in category_raw.split(">") if s.strip() and s.strip() != "음식점"]
-
-    keyword_map = [
-        ("한식", ["한식"]),
-        ("중식", ["중식", "중국음식"]),
-        ("일식", ["일식", "일본음식"]),
-        ("양식", ["양식", "이탈리안", "프렌치", "스테이크"]),
-        ("베이커리", ["베이커리", "빵집", "제과"]),
-        ("디저트", ["디저트", "카페"]),
-        ("에스닉", ["아시아음식", "베트남", "태국", "인도음식", "멕시코", "중동음식", "에스닉"]),
-    ]
-
-    product_group = "기타"
-    matched_segment = None
-    for seg in segments:
-        for group, keywords in keyword_map:
-            if any(k in seg for k in keywords):
-                product_group = group
-                matched_segment = seg
-                break
-        if matched_segment:
-            break
-
-    detail_segments = [s for s in segments if s != matched_segment]
-    detail = detail_segments[-1] if detail_segments else ""
-    return product_group, detail
-
-
 def _district_only(address):
-    """'서울특별시 강남구 논현로152길 36 1층' -> '서울특별시 강남구'처럼 구까지만 남긴다."""
+    """'서울 강남구 도산대로1길 10' -> '서울 강남구'처럼 구까지만 남긴다."""
     parts = address.split()
     return " ".join(parts[:2]) if len(parts) >= 2 else address
-
-
-def search_restaurants():
-    """네이버 지역검색 API로 config.PRODUCT_GROUPS에 해당하는 가게 후보를 모은다."""
-    headers = {
-        "X-Naver-Client-Id": config.NAVER_CLIENT_ID,
-        "X-Naver-Client-Secret": config.NAVER_CLIENT_SECRET,
-    }
-
-    results = {}
-
-    search_keywords = []
-    for group in config.PRODUCT_GROUPS:
-        search_keywords.extend(SEARCH_KEYWORDS_BY_GROUP.get(group, [group]))
-
-    queries = [
-        f"{config.DISTRICT} {neighborhood} {keyword}"
-        for neighborhood in config.NEIGHBORHOODS
-        for keyword in search_keywords
-    ]
-
-    for query in queries:
-        params = {
-            "query": query,
-            "display": 5,  # 네이버 지역검색 API 특성상 한 번에 최대 5개까지만 받을 수 있음
-            "start": 1,
-            "sort": "comment",  # 리뷰(댓글) 많은 순으로 정렬해서 상위 5개를 받음
-        }
-        try:
-            resp = requests.get(LOCAL_SEARCH_URL, headers=headers, params=params, timeout=10)
-            resp.raise_for_status()
-        except requests.RequestException as e:
-            print(f"[검색 실패] '{query}': {e}")
-            continue
-
-        items = resp.json().get("items", [])
-        for item in items:
-            name = re.sub("<.*?>", "", item.get("title", ""))
-            category_raw = item.get("category", "")
-            address = item.get("roadAddress") or item.get("address", "")
-
-            product_group, detail_category = _classify_category(category_raw)
-            if product_group not in config.PRODUCT_GROUPS:
-                continue
-
-            key = (name, address)
-            if key not in results:
-                results[key] = {
-                    "가게이름": name,
-                    "상품군": product_group,
-                    "카테고리": detail_category,
-                    "주소": _district_only(address),
-                }
-
-        time.sleep(0.3)  # 초당 API 호출 제한을 지키기 위한 짧은 대기
-
-    print(f"지역검색으로 찾은 후보: {len(results)}곳")
-    return list(results.values())
 
 
 def _parse_review_count(text):
@@ -163,11 +62,69 @@ def _parse_review_count(text):
     return int(value)
 
 
-def _parse_ai_briefing(text, max_items=2):
-    """'AI 요약'/'AI 브리핑' 라벨 주변의 짧은 소개 문구를 최대 max_items개까지 가져온다.
+# 가게 이름 뒤에 공백 없이 바로 붙어 나올 수 있는 '예약/톡톡/쿠폰' 같은 배지 글자들.
+# 목록 항목 첫 줄에서 이런 배지가 이름에 섞여 나오면 뒤에서부터 잘라낸다.
+_KNOWN_BADGE_WORDS = ["예약", "톡톡", "쿠폰", "포장주문", "발견"]
 
-    'AI 브리핑' 아래에는 보통 요약 문장이 몇 개 나오고, 문장마다 끝에
-    '닉네임 +2' 같은 출처 표시가 붙는다. 그 표시를 기준으로 문장 단위를 나눈다.
+
+def _strip_trailing_badges(name):
+    changed = True
+    while changed:
+        changed = False
+        for badge in _KNOWN_BADGE_WORDS:
+            if name.endswith(badge):
+                name = name[: -len(badge)]
+                changed = True
+    return name.strip()
+
+
+def _parse_list_item(text):
+    """검색 결과 '목록'에 나오는 항목 하나의 텍스트에서 (가게이름, 리뷰수)를 뽑아낸다.
+
+    목록의 각 항목은 보통 첫 줄이 가게 이름이고, 어딘가에 '리뷰 N' 형태로
+    리뷰 수가 나온다. 리뷰 수가 없는 항목(광고/필터 칩 등)은 걸러진다.
+    """
+    review_count = _parse_review_count(text)
+    if review_count is None:
+        return None
+
+    first_line = _strip_trailing_badges(text.strip().split("\n")[0].strip())
+    if not first_line:
+        return None
+
+    return first_line, review_count
+
+
+def _extract_name_and_category(body_text):
+    """상세 페이지 글자에서 '별점' 바로 앞 두 줄(가게이름, 카테고리)을 뽑아낸다.
+
+    네이버 플레이스 상세 화면은 보통 '...\\n가게이름\\n카테고리\\n별점\\n4.85리뷰...'
+    순서로 나온다.
+    """
+    idx = body_text.find("별점")
+    if idx == -1:
+        return "", ""
+
+    lines = [l.strip() for l in body_text[:idx].split("\n") if l.strip()]
+    if not lines:
+        return "", ""
+
+    category = lines[-1]
+    name = lines[-2] if len(lines) >= 2 else ""
+    return name, category
+
+
+def _extract_address(body_text):
+    """상세 페이지 글자에서 '주소' 라벨 바로 다음 줄을 주소로 가져온다."""
+    match = re.search(r"주소\n([^\n]+)", body_text)
+    return match.group(1).strip() if match else ""
+
+
+def _parse_ai_briefing(text, max_items=2):
+    """'AI 브리핑' 라벨 아래에 나오는 요약 문장을 최대 max_items개까지 가져온다.
+
+    각 요약 문장 끝에는 보통 '닉네임 +2' 같은 출처 표시가 붙는데,
+    그 표시를 기준으로 문장 단위를 나눈다.
     """
     match = re.search(r"AI\s*브리핑", text)
     if not match:
@@ -212,10 +169,110 @@ def _wait_for_list_or_entry(page, timeout_ms=15000, poll_ms=300):
     return "timeout"
 
 
-def _try_get_place_details(page, name):
-    """실제로 검색 -> (필요하면) 목록 클릭 -> 상세 페이지 읽기를 한 번 시도한다.
+def _scroll_and_collect_list_items(page, max_scrolls, stable_limit=3):
+    """검색 결과 목록을 마우스 휠로 계속 내리면서, 더 이상 새 항목이 안 늘어날
+    때까지(또는 max_scrolls번 스크롤할 때까지) 항목들의 원문 텍스트를 모은다.
+    """
+    search_frame = page.frame_locator("#searchIframe")
+    page.mouse.move(200, 500)
 
-    반환값: (상세정보 dict 또는 None, 실패 원인을 설명하는 디버그 문자열 또는 None)
+    def _current_texts():
+        items = search_frame.locator("li").all()
+        texts = []
+        for it in items:
+            try:
+                t = it.inner_text(timeout=2000)
+            except Exception:
+                continue
+            if "리뷰" in t:
+                texts.append(t)
+        return texts
+
+    texts = _current_texts()
+    stable_rounds = 0
+    for _ in range(max_scrolls):
+        page.mouse.wheel(0, 2000)
+        page.wait_for_timeout(700)
+        new_texts = _current_texts()
+
+        if len(new_texts) <= len(texts):
+            stable_rounds += 1
+            if stable_rounds >= stable_limit:
+                break
+        else:
+            stable_rounds = 0
+
+        texts = new_texts
+
+    return texts
+
+
+def collect_candidates():
+    """config.py에 있는 지역 x 음식종류 조합마다 네이버 지도에서 검색 -> 목록 스크롤
+    -> 리뷰 1000개 이상인 후보만 골라 모은다. (browser context/page는 이 함수 안에서
+    새로 열고 닫는다.)
+    """
+    candidates = {}
+    debug_shown = False
+
+    with sync_playwright() as p:
+        context, page = _open_browser(p)
+
+        for group in config.PRODUCT_GROUPS:
+            query = f"{config.DISTRICT} {group}"
+            print(f"'{query}' 검색 중...")
+            page.goto(f"https://map.naver.com/p/search/{quote(query)}", timeout=30000)
+
+            state = _wait_for_list_or_entry(page)
+
+            if state == "entry":
+                # 검색 결과가 통째로 1건뿐이라 목록 없이 바로 상세 페이지로 들어간 경우
+                try:
+                    entry_frame = page.frame_locator("#entryIframe")
+                    body_text = entry_frame.locator("body").inner_text(timeout=10000)
+                    review_count = _parse_review_count(body_text)
+                    name, _ = _extract_name_and_category(body_text)
+                    if review_count is not None and review_count >= config.MIN_REVIEW_COUNT and name:
+                        candidates.setdefault(name, {"가게이름": name, "상품군": group, "리뷰수": review_count})
+                except Exception as e:
+                    print(f"  -> 상세 페이지를 읽지 못했습니다: {e}")
+            elif state == "list":
+                item_texts = _scroll_and_collect_list_items(page, max_scrolls=config.MAX_LIST_SCROLLS)
+
+                if not debug_shown:
+                    print("  ---- (목록이 잘 읽히는지 확인용) 처음 3개 항목 원문 ----")
+                    for t in item_texts[:3]:
+                        print("  >>>", repr(t))
+                    print("  --------------------------------------------------------")
+                    debug_shown = True
+
+                found_in_query = 0
+                for text in item_texts:
+                    parsed = _parse_list_item(text)
+                    if not parsed:
+                        continue
+                    name, review_count = parsed
+                    if review_count < config.MIN_REVIEW_COUNT:
+                        continue
+                    if name not in candidates:
+                        candidates[name] = {"가게이름": name, "상품군": group, "리뷰수": review_count}
+                        found_in_query += 1
+                print(f"  -> 목록 {len(item_texts)}개 중 리뷰 {config.MIN_REVIEW_COUNT}개 이상 신규 {found_in_query}곳")
+            else:
+                print("  -> 목록도 상세 페이지도 뜨지 않았습니다 (타임아웃). 건너뜁니다.")
+
+            time.sleep(random.uniform(2.0, 4.0))
+
+        context.close()
+
+    return list(candidates.values())
+
+
+def _try_get_extra_info(page, name):
+    """가게 이름으로 다시 검색해 상세 페이지에 들어가서 주소/카테고리/AI 브리핑/
+    지도 링크를 읽어온다. (리뷰 수는 목록 단계에서 이미 구했으므로 여기서는 안 읽는다.)
+
+    반환값: (정보 dict 또는 None, 실패 원인을 설명하는 디버그 문자열 또는 None)
     """
     # 주소 전체를 검색어로 쓰면 실제 사람이 잘 안 쓰는 특이한 검색어라 자동화로
     # 의심받기 쉬워서, 가게이름 + 지역구 정도로 짧고 자연스러운 검색어를 사용한다.
@@ -269,47 +326,58 @@ def _try_get_place_details(page, name):
             )
         return None, debug
 
-    review_count = _parse_review_count(body_text)
-    if review_count is None:
-        debug = (
-            f"'리뷰' 뒤에 오는 숫자를 페이지에서 못 찾았습니다.\n"
-            f"현재 페이지 URL: {page.url}\n"
-            f"entryIframe에서 읽은 글자 (앞부분 800자):\n{body_text[:800]}"
-        )
-        return None, debug
-
+    _, category = _extract_name_and_category(body_text)
+    address = _district_only(_extract_address(body_text))
     description, briefing_debug = _parse_ai_briefing(body_text)
 
-    details = {
-        "리뷰수": review_count,
+    info = {
+        "카테고리": category,
+        "주소": address,
         "네이버지도 주소": page.url,
         "브랜드설명": description or "",
         "_브리핑디버그": briefing_debug,
     }
-    return details, None
+    return info, None
 
 
-def get_place_details(page, name, max_attempts=2):
-    """네이버 지도에서 가게 이름으로 검색해 들어간 뒤, 리뷰 수/AI 브리핑/지도 링크를 읽어온다.
-
-    타이밍이 꼬여서 실패하는 경우를 대비해 캡차가 아닌 실패는 한 번 더 재시도한다.
-
-    반환값: (상세정보 dict 또는 None, 실패 원인을 설명하는 디버그 문자열 또는 None)
-    """
+def get_extra_info(page, name, max_attempts=2):
+    """캡차가 아닌 실패는 타이밍 문제일 수 있으므로 한 번 더 재시도한다."""
     debug_info = None
     for attempt in range(1, max_attempts + 1):
-        details, debug_info = _try_get_place_details(page, name)
-        if details is not None:
-            return details, None
+        info, debug_info = _try_get_extra_info(page, name)
+        if info is not None:
+            return info, None
 
         if debug_info and "캡차" in debug_info:
-            # 캡차는 다시 시도해도 똑같이 막히므로 바로 포기하고 사용자에게 알린다.
             return None, debug_info
 
         if attempt < max_attempts:
             page.wait_for_timeout(2000)
 
     return None, debug_info
+
+
+def _open_browser(p):
+    """launch_persistent_context: 매번 새 브라우저가 아니라 browser_profile 폴더에
+    쿠키/방문 기록을 저장해두고 재사용한다. 캡차를 한 번 풀면 그 기록이 남아서
+    다음 실행부터는 덜 의심받는다.
+    """
+    context = p.chromium.launch_persistent_context(
+        PROFILE_DIR,
+        headless=config.HEADLESS,
+        user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+        ),
+        viewport={"width": 1400, "height": 900},
+        args=["--disable-blink-features=AutomationControlled"],
+    )
+    # 자동화 브라우저임을 알리는 대표적인 신호(navigator.webdriver)를 숨긴다.
+    context.add_init_script(
+        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+    )
+    page = context.new_page()
+    return context, page
 
 
 def _display_width(text):
@@ -371,44 +439,29 @@ def save_excel(rows, output_file):
 
 
 def main():
-    candidates = search_restaurants()
+    candidates = collect_candidates()
     if not candidates:
         print("검색된 가게가 없습니다. config.py의 검색 조건을 확인하세요.")
         return
 
+    print(f"1차로 찾은 (리뷰 {config.MIN_REVIEW_COUNT}개 이상) 후보: {len(candidates)}곳")
+
     final_rows = []
 
     with sync_playwright() as p:
-        # launch_persistent_context: 매번 새 브라우저가 아니라 browser_profile 폴더에
-        # 쿠키/방문 기록을 저장해두고 재사용한다. 캡차를 한 번 풀면 그 기록이 남아서
-        # 다음 실행부터는 덜 의심받는다.
-        context = p.chromium.launch_persistent_context(
-            PROFILE_DIR,
-            headless=config.HEADLESS,
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
-            ),
-            viewport={"width": 1400, "height": 900},
-            args=["--disable-blink-features=AutomationControlled"],
-        )
-        # 자동화 브라우저임을 알리는 대표적인 신호(navigator.webdriver)를 숨긴다.
-        context.add_init_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-        )
-        page = context.new_page()
+        context, page = _open_browser(p)
 
         debug_shown = 0
         briefing_debug_shown = 0
         for i, place in enumerate(candidates, 1):
-            print(f"[{i}/{len(candidates)}] 확인 중: {place['가게이름']}")
+            print(f"[{i}/{len(candidates)}] 상세정보 확인 중: {place['가게이름']} (리뷰 {place['리뷰수']})")
             try:
-                details, debug_info = get_place_details(page, place["가게이름"])
+                info, debug_info = get_extra_info(page, place["가게이름"])
             except Exception as e:
-                details, debug_info = None, f"예외 발생: {e}"
+                info, debug_info = None, f"예외 발생: {e}"
 
-            if details is None:
-                print("  -> 정보를 찾지 못했습니다. 건너뜁니다.")
+            if info is None:
+                print("  -> 상세정보를 찾지 못했습니다. 건너뜁니다.")
                 if debug_info and debug_shown < 2:
                     print("  ========== 디버그 정보 (이 부분을 복사해서 보내주세요) ==========")
                     print(debug_info)
@@ -416,26 +469,22 @@ def main():
                     debug_shown += 1
                 continue
 
-            review_count = details["리뷰수"]
-            print(f"  -> 리뷰 수: {review_count}")
-
             if briefing_debug_shown < 2:
-                print("  ---- (브랜드설명이 맞는지 확인용) AI 요약 라벨 주변 텍스트 ----")
-                print(f"  현재 추출된 브랜드설명: {details['브랜드설명']!r}")
-                print(f"  {details['_브리핑디버그']}")
-                print("  ---------------------------------------------------------------")
+                print("  ---- (브랜드설명이 맞는지 확인용) AI 브리핑 주변 텍스트 ----")
+                print(f"  현재 추출된 브랜드설명: {info['브랜드설명']!r}")
+                print(f"  {info['_브리핑디버그']}")
+                print("  ------------------------------------------------------------")
                 briefing_debug_shown += 1
 
-            if review_count >= config.MIN_REVIEW_COUNT:
-                final_rows.append({
-                    "가게이름": place["가게이름"],
-                    "상품군": place["상품군"],
-                    "카테고리": place["카테고리"],
-                    "주소": place["주소"],
-                    "네이버지도 주소": details["네이버지도 주소"],
-                    "리뷰수": review_count,
-                    "브랜드설명": details["브랜드설명"],
-                })
+            final_rows.append({
+                "가게이름": place["가게이름"],
+                "상품군": place["상품군"],
+                "카테고리": info["카테고리"],
+                "주소": info["주소"],
+                "네이버지도 주소": info["네이버지도 주소"],
+                "리뷰수": place["리뷰수"],
+                "브랜드설명": info["브랜드설명"],
+            })
 
             # 너무 빠르게 계속 요청하지 않도록 잠깐 대기
             # (사이트에 부담을 주지 않고, 자동화로 의심받지 않기 위함)
