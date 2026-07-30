@@ -99,29 +99,29 @@ def _parse_review_count(text):
     return int(value)
 
 
-def get_review_count(page, name, address):
-    """네이버 지도에서 가게 이름으로 검색해 들어간 뒤, 리뷰 개수를 읽어온다.
-
-    반환값: (리뷰개수 또는 None, 실패 원인을 설명하는 디버그 문자열 또는 None)
-    """
+def _try_get_review_count(page, name):
+    """실제로 검색 -> 목록 클릭 -> 상세 페이지 읽기를 한 번 시도한다."""
     # 주소 전체를 검색어로 쓰면 실제 사람이 잘 안 쓰는 특이한 검색어라 자동화로
     # 의심받기 쉬워서, 가게이름 + 지역구 정도로 짧고 자연스러운 검색어를 사용한다.
     query = quote(f"{name} {config.DISTRICT}")
     page.goto(f"https://map.naver.com/p/search/{query}", timeout=30000)
-    page.wait_for_timeout(2500)
 
     try:
         search_frame = page.frame_locator("#searchIframe")
+        # 고정된 시간만큼 기다리는 대신, 목록의 첫 항목이 실제로 화면에 나타날 때까지 기다린다.
+        # (검색 결과 목록이 늦게 뜰 때 너무 일찍 클릭해서 꼬이는 문제를 막기 위함)
+        search_frame.locator("li").first.wait_for(state="visible", timeout=15000)
         # 검색 결과 목록에서 가게 이름이 포함된 첫 번째 항목 클릭
-        search_frame.locator("li").filter(has_text=name).first.click(timeout=8000)
-        page.wait_for_timeout(2000)
+        search_frame.locator("li").filter(has_text=name).first.click(timeout=15000)
+        page.wait_for_timeout(2500)
     except Exception:
         # 검색 결과가 1건이라 목록 없이 바로 상세 페이지로 들어간 경우일 수 있음
         pass
 
     try:
         entry_frame = page.frame_locator("#entryIframe")
-        body_text = entry_frame.locator("body").inner_text(timeout=8000)
+        # 상세 페이지(entryIframe)도 내용이 다 그려질 때까지 넉넉하게 기다린다.
+        body_text = entry_frame.locator("body").inner_text(timeout=15000)
     except Exception as e:
         frame_names = [f.name or "(이름없음)" for f in page.frames]
 
@@ -152,6 +152,29 @@ def get_review_count(page, name, address):
         return None, debug
 
     return review_count, None
+
+
+def get_review_count(page, name, address, max_attempts=2):
+    """네이버 지도에서 가게 이름으로 검색해 들어간 뒤, 리뷰 개수를 읽어온다.
+
+    타이밍이 꼬여서 실패하는 경우를 대비해 캡차가 아닌 실패는 한 번 더 재시도한다.
+
+    반환값: (리뷰개수 또는 None, 실패 원인을 설명하는 디버그 문자열 또는 None)
+    """
+    debug_info = None
+    for attempt in range(1, max_attempts + 1):
+        review_count, debug_info = _try_get_review_count(page, name)
+        if review_count is not None:
+            return review_count, None
+
+        if debug_info and "캡차" in debug_info:
+            # 캡차는 다시 시도해도 똑같이 막히므로 바로 포기하고 사용자에게 알린다.
+            return None, debug_info
+
+        if attempt < max_attempts:
+            page.wait_for_timeout(2000)
+
+    return None, debug_info
 
 
 def main():
