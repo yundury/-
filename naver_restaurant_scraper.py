@@ -169,42 +169,64 @@ def _wait_for_list_or_entry(page, timeout_ms=15000, poll_ms=300):
     return "timeout"
 
 
-def _scroll_and_collect_list_items(page, max_scrolls, stable_limit=3):
-    """검색 결과 목록을 마우스 휠로 계속 내리면서, 더 이상 새 항목이 안 늘어날
-    때까지(또는 max_scrolls번 스크롤할 때까지) 항목들의 원문 텍스트를 모은다.
+def _current_list_item_texts(search_frame):
+    """지금 화면에 있는 목록 항목들 중 '리뷰'가 포함된 것만 텍스트로 가져온다."""
+    items = search_frame.locator("li").all()
+    texts = []
+    for it in items:
+        try:
+            t = it.inner_text(timeout=2000)
+        except Exception:
+            continue
+        if "리뷰" in t:
+            texts.append(t)
+    return texts
+
+
+def _go_to_next_page(search_frame):
+    """목록 맨 아래 페이지 번호(1 2 3 4 5 >) 중 '다음 페이지' 화살표를 눌러본다.
+
+    정확한 버튼 모양을 확인할 방법이 없어서 몇 가지 후보를 순서대로 시도한다.
+    성공하면 True, 다음 페이지가 없거나 버튼을 못 찾으면 False를 돌려준다.
+    """
+    candidates = [
+        lambda: search_frame.get_by_role("link", name=re.compile("다음")),
+        lambda: search_frame.locator("a[aria-label*='다음']"),
+        lambda: search_frame.locator("a:has-text('다음페이지')"),
+        lambda: search_frame.locator("a.eUTV2"),  # 네이버 지도 페이지네이션에 흔히 쓰이는 클래스(추정)
+    ]
+    for make_locator in candidates:
+        try:
+            locator = make_locator()
+            if locator.count() > 0 and locator.first.is_enabled():
+                locator.first.click(timeout=3000)
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _collect_list_items_across_pages(page, max_pages):
+    """검색 결과 목록은 무한 스크롤이 아니라 '페이지 번호(1,2,3...)'로 나뉘어 있다.
+    한 페이지 안의 항목을 모두 읽은 뒤, '다음 페이지' 버튼을 눌러가며 반복한다.
     """
     search_frame = page.frame_locator("#searchIframe")
-    page.mouse.move(200, 500)
+    all_texts = []
 
-    def _current_texts():
-        items = search_frame.locator("li").all()
-        texts = []
-        for it in items:
-            try:
-                t = it.inner_text(timeout=2000)
-            except Exception:
-                continue
-            if "리뷰" in t:
-                texts.append(t)
-        return texts
+    for page_num in range(1, max_pages + 1):
+        page.wait_for_timeout(800)  # 페이지 전환 후 목록이 그려질 시간을 준다
+        page_texts = _current_list_item_texts(search_frame)
+        all_texts.extend(page_texts)
+        print(f"    {page_num}페이지: {len(page_texts)}개 항목")
 
-    texts = _current_texts()
-    stable_rounds = 0
-    for _ in range(max_scrolls):
-        page.mouse.wheel(0, 2000)
-        page.wait_for_timeout(700)
-        new_texts = _current_texts()
-
-        if len(new_texts) <= len(texts):
-            stable_rounds += 1
-            if stable_rounds >= stable_limit:
+        if page_num < max_pages:
+            moved = _go_to_next_page(search_frame)
+            if not moved:
+                print(f"    다음 페이지 버튼을 찾지 못했습니다 ({page_num}페이지에서 멈춤).")
                 break
-        else:
-            stable_rounds = 0
+            page.wait_for_timeout(1200)
 
-        texts = new_texts
-
-    return texts
+    return all_texts
 
 
 def collect_candidates():
@@ -237,7 +259,7 @@ def collect_candidates():
                 except Exception as e:
                     print(f"  -> 상세 페이지를 읽지 못했습니다: {e}")
             elif state == "list":
-                item_texts = _scroll_and_collect_list_items(page, max_scrolls=config.MAX_LIST_SCROLLS)
+                item_texts = _collect_list_items_across_pages(page, max_pages=config.MAX_LIST_PAGES)
 
                 if not debug_shown:
                     print("  ---- (목록이 잘 읽히는지 확인용) 처음 3개 항목 원문 ----")
