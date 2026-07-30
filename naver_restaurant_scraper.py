@@ -107,37 +107,17 @@ def _extract_review_snippet(lines):
     return pool[-1]
 
 
-# 카테고리 후보 줄에서 걸러야 할, 배지/홍보 문구로 확인된 단어들.
-# ("예약", "광고" 같은 배지가 이름과 같은 줄이 아니라 자기 혼자 줄로 나오는
-#  경우가 있어서, 카테고리인 줄 알고 잘못 주워온 적이 있었다)
-_CATEGORY_SKIP_WORDS = _KNOWN_BADGE_WORDS + ["광고", "place+", "새로오픈"]
-_CATEGORY_PROMO_HINTS = ("쿠폰", "증정", "할인", "제공", "이벤트", "무료", "%", "적립")
-
-
-def _extract_category_from_list(lines):
-    """목록 카드에서 짧은 카테고리 태그로 보이는 줄을 찾는다.
-
-    이름 다음 몇 줄 안에서, '예약'/'광고' 같은 배지 단어나 홍보 문구가 아니면서
-    짧고(8자 이하) 공백이 없는 줄을 카테고리로 본다. 확실하지 않은 추정이라
-    가게에 따라 비어있거나 틀릴 수 있다.
-    """
-    for line in lines[1:4]:
-        if line in _CATEGORY_SKIP_WORDS:
-            continue
-        if any(h in line for h in _CATEGORY_PROMO_HINTS):
-            continue
-        if len(line) <= 8 and " " not in line and "동" not in line:
-            return line
-    return ""
-
-
 def _parse_list_item(text):
     """검색 결과 '목록'에 나오는 항목 하나의 텍스트에서 정보를 뽑아낸다.
 
     목록의 각 항목은 보통 첫 줄이 가게 이름이고, 어딘가에 '리뷰 N' 형태로
     리뷰 수가 나온다. 리뷰 수가 없는 항목(광고/필터 칩 등)은 걸러진다.
 
-    반환값: {"가게이름", "리뷰수", "브랜드설명", "카테고리"} 또는 None
+    카테고리/지도 링크는 목록 카드 글자만으로는 정확히 구분하기 어려워서
+    (배지/홍보 문구와 뒤섞여 나옴), 여기서는 채우지 않는다 - 기준 리뷰 수를
+    넘는 항목만 클릭해서 상세 패널에서 정확하게 가져온다 (_current_list_rows 참고).
+
+    반환값: {"가게이름", "리뷰수", "브랜드설명"} 또는 None
     """
     review_count = _parse_review_count(text)
     if review_count is None:
@@ -155,35 +135,7 @@ def _parse_list_item(text):
         "가게이름": name,
         "리뷰수": review_count,
         "브랜드설명": _extract_review_snippet(lines),
-        "카테고리": _extract_category_from_list(lines),
     }
-
-
-# 가게 상세 페이지 URL은 보통 '/restaurant/12345678' 또는 '/place/12345678'처럼
-# 숫자 ID가 붙은 형태다. 목록 카드 안에는 링크가 여러 개 있을 수 있어서(예: 목록
-# 검색으로 돌아가는 링크 등), 이 패턴에 맞는 것을 우선으로 고른다.
-_PLACE_URL_PATTERN = r"/(restaurant|place)/\d"
-
-
-def _extract_map_url(item_locator):
-    """목록 항목 안에 있는 <a> 태그들 중, 가게 상세 페이지로 보이는 링크(href)를 가져온다.
-
-    상세 페이지에 따로 들어가지 않고, 목록에 이미 걸려있는 링크를 그대로 쓴다.
-    """
-    try:
-        href = item_locator.evaluate(
-            """(el, pattern) => {
-                const re = new RegExp(pattern);
-                const anchors = [el.closest('a'), ...el.querySelectorAll('a')].filter(Boolean);
-                const match = anchors.find(a => re.test(a.href));
-                if (match) return match.href;
-                return anchors.length ? anchors[0].href : '';
-            }""",
-            _PLACE_URL_PATTERN,
-        )
-        return href or ""
-    except Exception:
-        return ""
 
 
 def _extract_name_and_category(body_text):
@@ -260,12 +212,61 @@ def _wait_for_list_or_entry(page, timeout_ms=15000, poll_ms=300):
     return "timeout"
 
 
-def _current_list_rows(search_frame):
+# 상세 패널의 상태줄(예: '새로오픈 · 두부요리 · ★4.79 · 리뷰 1,201')에서
+# 카테고리가 아닌 것으로 확인된 단어들. 이 단어가 포함된 조각은 카테고리 후보에서 뺀다.
+_STATUS_LINE_HINTS = ("영업", "라스트오더", "휴무", "브레이크", "24시간", "리뷰", "새로오픈")
+
+
+def _category_from_status_line(body_text):
+    """상세 패널 글자에서 상태줄(예: '새로오픈 · 두부요리 · ★4.79 · 리뷰 1,201')을
+    찾아 카테고리 조각만 뽑아낸다.
+
+    상태줄은 '·'로 구분되어 있어서, 별점(★로 시작)/리뷰/영업상태가 아닌
+    조각을 카테고리로 본다.
+    """
+    for line in body_text.split("\n"):
+        if "리뷰" not in line or "·" not in line:
+            continue
+        parts = [p.strip() for p in line.split("·") if p.strip()]
+        for part in parts:
+            if part.startswith("★") or any(h in part for h in _STATUS_LINE_HINTS):
+                continue
+            if len(part) <= 12:
+                return part
+        break
+    return ""
+
+
+def _read_entry_category(page, entry_frame, max_attempts=6):
+    """목록에서 항목을 클릭해 옆에 뜬 상세 패널이 로딩되길 기다리면서,
+    상태줄에서 카테고리(예: '두부요리')를 읽어온다.
+    """
+    for _ in range(max_attempts):
+        try:
+            body_text = entry_frame.locator("body").inner_text(timeout=1500)
+        except Exception:
+            body_text = ""
+
+        category = _category_from_status_line(body_text)
+        if category:
+            return category
+
+        page.wait_for_timeout(400)
+
+    return ""
+
+
+def _current_list_rows(page, search_frame, min_reviews, visited):
     """지금 화면에 있는 목록 항목들 중 '리뷰'가 포함된 것만 정보를 뽑아서 가져온다.
 
     (화면 밖으로 스크롤되면 항목이 DOM에서 사라지는 경우가 있어서, 스크롤하며
     보일 때마다 그때그때 뽑아둬야 한다. 나중에 한꺼번에 훑으면 이미 사라진
     항목의 정보를 놓칠 수 있다.)
+
+    기준 리뷰 수를 넘는 항목만 클릭해서 옆에 뜨는 상세 패널로 정확한 카테고리와
+    실제 지도 링크(page.url)를 가져온다. 목록 페이지를 새로 열지 않고, 지금 열려
+    있는 목록에서 바로 클릭하는 거라 상세 페이지를 매번 새로 여는 것보다 훨씬
+    빠르다. (기준 미달 항목은 클릭하지 않고 건너뛴다.)
     """
     items = search_frame.locator("li").all()
     rows = []
@@ -279,7 +280,24 @@ def _current_list_rows(search_frame):
         parsed = _parse_list_item(text)
         if not parsed:
             continue
-        parsed["네이버지도 주소"] = _extract_map_url(it)
+        if parsed["가게이름"] in visited:
+            continue
+        if parsed["리뷰수"] < min_reviews:
+            continue
+        visited.add(parsed["가게이름"])
+
+        category, map_url = "", ""
+        try:
+            it.click(timeout=3000)
+            page.wait_for_timeout(600)
+            entry_frame = page.frame_locator("#entryIframe")
+            category = _read_entry_category(page, entry_frame)
+            map_url = page.url
+        except Exception:
+            pass
+
+        parsed["카테고리"] = category
+        parsed["네이버지도 주소"] = map_url
         rows.append(parsed)
     return rows
 
@@ -323,7 +341,7 @@ def _hover_over_list(page, search_frame):
     page.mouse.move(200, 500)
 
 
-def _scroll_current_page(page, search_frame, max_scrolls=25, stable_limit=4):
+def _scroll_current_page(page, search_frame, min_reviews, visited, max_scrolls=25, stable_limit=4):
     """한 페이지 안에서는 무한 스크롤로 계속 더 불러와진다. 더 이상 새 항목이
     안 늘어날 때까지(또는 max_scrolls번 스크롤할 때까지) 마우스 휠로 내리면서 모은다.
 
@@ -340,7 +358,7 @@ def _scroll_current_page(page, search_frame, max_scrolls=25, stable_limit=4):
     collected = {}
 
     def _merge_current():
-        for row in _current_list_rows(search_frame):
+        for row in _current_list_rows(page, search_frame, min_reviews, visited):
             collected.setdefault(row["가게이름"], row)
 
     _merge_current()
@@ -361,20 +379,21 @@ def _scroll_current_page(page, search_frame, max_scrolls=25, stable_limit=4):
     return list(collected.values())
 
 
-def _collect_list_items_across_pages(page, max_pages):
+def _collect_list_items_across_pages(page, max_pages, min_reviews):
     """검색 결과 목록은 한 페이지 안에서 무한 스크롤로 꽤 많이 불러와지고,
     그 스크롤이 끝나면 '페이지 번호(1,2,3...)'로 다음 목록으로 넘어가는 구조다.
     한 페이지를 끝까지 스크롤해서 다 모은 뒤, '다음 페이지' 버튼을 눌러가며 반복한다.
     """
     search_frame = page.frame_locator("#searchIframe")
     all_rows = {}
+    visited = set()  # 이미 클릭해서 상세정보를 가져온 가게 이름 (중복 클릭 방지)
 
     for page_num in range(1, max_pages + 1):
         page.wait_for_timeout(800)  # 페이지 전환 후 목록이 그려질 시간을 준다
-        page_rows = _scroll_current_page(page, search_frame)
+        page_rows = _scroll_current_page(page, search_frame, min_reviews, visited)
         for row in page_rows:
             all_rows.setdefault(row["가게이름"], row)
-        print(f"    {page_num}페이지: {len(page_rows)}개 항목")
+        print(f"    {page_num}페이지: 리뷰 {min_reviews}개 이상 {len(page_rows)}곳")
 
         if page_num < max_pages:
             moved = _go_to_next_page(search_frame)
@@ -410,7 +429,8 @@ def collect_candidates():
                     entry_frame = page.frame_locator("#entryIframe")
                     body_text = entry_frame.locator("body").inner_text(timeout=10000)
                     review_count = _parse_review_count(body_text)
-                    name, category = _extract_name_and_category(body_text)
+                    name, _ = _extract_name_and_category(body_text)
+                    category = _category_from_status_line(body_text)
                     if review_count is not None and review_count >= config.MIN_REVIEW_COUNT and name:
                         candidates.setdefault(name, {
                             "가게이름": name,
@@ -423,7 +443,9 @@ def collect_candidates():
                 except Exception as e:
                     print(f"  -> 상세 페이지를 읽지 못했습니다: {e}")
             elif state == "list":
-                rows = _collect_list_items_across_pages(page, max_pages=config.MAX_LIST_PAGES)
+                rows = _collect_list_items_across_pages(
+                    page, max_pages=config.MAX_LIST_PAGES, min_reviews=config.MIN_REVIEW_COUNT
+                )
 
                 if not debug_shown:
                     print("  ---- (목록이 잘 읽히는지 확인용) 처음 3곳 추출 결과 ----")
