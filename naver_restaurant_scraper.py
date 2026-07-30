@@ -226,28 +226,31 @@ def _wait_for_list_or_entry(page, timeout_ms=15000, poll_ms=300):
     return "timeout"
 
 
-# 상세 패널의 상태줄(예: '새로오픈 · 두부요리 · ★4.79 · 리뷰 1,201')에서
-# 카테고리가 아닌 것으로 확인된 단어들. 이 단어가 포함된 조각은 카테고리 후보에서 뺀다.
-_STATUS_LINE_HINTS = ("영업", "라스트오더", "휴무", "브레이크", "24시간", "리뷰", "새로오픈")
-
-
 def _category_from_status_line(body_text):
-    """상세 패널 글자에서 상태줄(예: '새로오픈 · 두부요리 · ★4.79 · 리뷰 1,201')을
-    찾아 카테고리 조각만 뽑아낸다.
+    """상세 패널 글자에서 카테고리를 뽑아낸다.
 
-    상태줄은 '·'로 구분되어 있어서, 별점(★로 시작)/리뷰/영업상태가 아닌
-    조각을 카테고리로 본다.
+    카테고리가 몇 번째 조각으로 나오는지는 가게마다 다르지만(예: '육류,고기요리 ·
+    리뷰 919', '새로오픈 · 두부요리 · ★4.79 · 리뷰 1,201'), 카테고리는 항상
+    '리뷰' 조각 바로 왼쪽에 나온다. 그 조각이 별점(★4.79)만 있으면 그 앞 조각을
+    대신 쓰고, 별점이 카테고리에 붙어 나오면(예: '두부요리 ★4.79') 그 부분만 잘라낸다.
     """
     for line in body_text.split("\n"):
         if "리뷰" not in line or "·" not in line:
             continue
+
         parts = [p.strip() for p in line.split("·") if p.strip()]
-        for part in parts:
-            if part.startswith("★") or any(h in part for h in _STATUS_LINE_HINTS):
-                continue
-            if len(part) <= 12:
-                return part
-        break
+        review_idx = next((i for i, p in enumerate(parts) if "리뷰" in p), None)
+        if review_idx is None or review_idx == 0:
+            return ""
+
+        idx = review_idx - 1
+        while idx >= 0 and re.fullmatch(r"★[\d.]+", parts[idx]):
+            idx -= 1
+        if idx < 0:
+            return ""
+
+        return re.sub(r"★[\d.]+\s*$", "", parts[idx]).strip()
+
     return ""
 
 
