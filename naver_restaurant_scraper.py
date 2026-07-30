@@ -7,6 +7,7 @@
 모든 설정값(API 키, 지역, 최소 리뷰 수 등)은 config.py에서 바꿉니다.
 """
 
+import os
 import re
 import time
 import random
@@ -20,6 +21,11 @@ import config
 
 
 LOCAL_SEARCH_URL = "https://openapi.naver.com/v1/search/local.json"
+
+# 브라우저 로그인/쿠키 정보를 저장해두는 폴더.
+# 매번 새 브라우저(신규 방문자)인 것처럼 접속하면 네이버가 자동화로 의심하기 쉬워서,
+# 같은 브라우저 프로필을 계속 재사용해 "이전에도 왔던 사람"처럼 보이게 한다.
+PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browser_profile")
 
 
 def search_restaurants():
@@ -94,11 +100,13 @@ def _parse_review_count(text):
 
 
 def get_review_count(page, name, address):
-    """네이버 지도에서 가게 이름+주소로 검색해 들어간 뒤, 리뷰 개수를 읽어온다.
+    """네이버 지도에서 가게 이름으로 검색해 들어간 뒤, 리뷰 개수를 읽어온다.
 
     반환값: (리뷰개수 또는 None, 실패 원인을 설명하는 디버그 문자열 또는 None)
     """
-    query = quote(f"{name} {address}")
+    # 주소 전체를 검색어로 쓰면 실제 사람이 잘 안 쓰는 특이한 검색어라 자동화로
+    # 의심받기 쉬워서, 가게이름 + 지역구 정도로 짧고 자연스러운 검색어를 사용한다.
+    query = quote(f"{name} {config.DISTRICT}")
     page.goto(f"https://map.naver.com/p/search/{query}", timeout=30000)
     page.wait_for_timeout(2500)
 
@@ -116,11 +124,22 @@ def get_review_count(page, name, address):
         body_text = entry_frame.locator("body").inner_text(timeout=8000)
     except Exception as e:
         frame_names = [f.name or "(이름없음)" for f in page.frames]
-        debug = (
-            f"entryIframe을 찾지 못했습니다 ({e}).\n"
-            f"현재 페이지 URL: {page.url}\n"
-            f"현재 페이지에 있는 프레임 이름 목록: {frame_names}"
-        )
+
+        if any("captcha" in fn.lower() for fn in frame_names):
+            debug = (
+                "네이버가 이 접속을 '자동화 프로그램'으로 의심해서 캡차(사람 인증) 화면을 띄웠습니다.\n"
+                "config.py에서 HEADLESS = False 로 바꾼 뒤 다시 실행해서, 뜨는 브라우저 창에서\n"
+                "캡차를 직접 한 번 풀어주세요. 이 프로그램은 브라우저 정보를 저장해두기 때문에,\n"
+                "한 번 풀고 나면 다음 실행부터는 안 떠야 정상입니다. 그래도 계속 뜨면,\n"
+                "요청 속도를 더 늦추거나(가게 수를 줄이거나) 시간을 두고 다시 시도해보세요.\n"
+                f"현재 페이지 URL: {page.url}"
+            )
+        else:
+            debug = (
+                f"entryIframe을 찾지 못했습니다 ({e}).\n"
+                f"현재 페이지 URL: {page.url}\n"
+                f"현재 페이지에 있는 프레임 이름 목록: {frame_names}"
+            )
         return None, debug
 
     review_count = _parse_review_count(body_text)
@@ -144,13 +163,24 @@ def main():
     final_rows = []
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=config.HEADLESS)
-        page = browser.new_page(
+        # launch_persistent_context: 매번 새 브라우저가 아니라 browser_profile 폴더에
+        # 쿠키/방문 기록을 저장해두고 재사용한다. 캡차를 한 번 풀면 그 기록이 남아서
+        # 다음 실행부터는 덜 의심받는다.
+        context = p.chromium.launch_persistent_context(
+            PROFILE_DIR,
+            headless=config.HEADLESS,
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
-            )
+            ),
+            viewport={"width": 1400, "height": 900},
+            args=["--disable-blink-features=AutomationControlled"],
         )
+        # 자동화 브라우저임을 알리는 대표적인 신호(navigator.webdriver)를 숨긴다.
+        context.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        )
+        page = context.new_page()
 
         debug_shown = 0
         for i, place in enumerate(candidates, 1):
@@ -179,10 +209,11 @@ def main():
                     "리뷰개수": review_count,
                 })
 
-            # 너무 빠르게 계속 요청하지 않도록 잠깐 대기 (사이트에 부담을 주지 않기 위함)
-            time.sleep(random.uniform(1.5, 3.0))
+            # 너무 빠르게 계속 요청하지 않도록 잠깐 대기
+            # (사이트에 부담을 주지 않고, 자동화로 의심받지 않기 위함)
+            time.sleep(random.uniform(3.0, 6.0))
 
-        browser.close()
+        context.close()
 
     if not final_rows:
         print(f"리뷰 {config.MIN_REVIEW_COUNT}개 이상인 가게가 없습니다.")
