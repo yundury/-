@@ -208,12 +208,13 @@ def _go_to_next_page(search_frame):
 
 def _hover_over_list(page, search_frame):
     """가게 목록 항목 위로 마우스를 옮긴다. 목록 바깥(지도 등)에서 휠을 돌리면
-    목록이 아니라 다른 곳이 스크롤돼서, 실제 목록 카드의 화면 좌표를 찾아 그 위로
-    옮긴 뒤 스크롤해야 한다. 좌표를 못 구하면 대략적인 위치로 대신한다.
+    목록이 아니라 지도가 움직여버리므로, 실제 목록 카드의 화면 좌표를 찾아 그 위로
+    옮긴 뒤 스크롤해야 한다. 좌표를 못 구하거나 목록 영역(화면 왼쪽) 밖으로
+    나오면 대략적인 위치로 대신한다.
     """
     try:
         box = search_frame.locator("li").first.bounding_box()
-        if box:
+        if box and box["width"] > 0 and box["x"] < 700:
             page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
             return
     except Exception:
@@ -224,13 +225,16 @@ def _hover_over_list(page, search_frame):
 def _scroll_current_page(page, search_frame, max_scrolls=25, stable_limit=3):
     """한 페이지 안에서는 무한 스크롤로 계속 더 불러와진다. 더 이상 새 항목이
     안 늘어날 때까지(또는 max_scrolls번 스크롤할 때까지) 마우스 휠로 내리면서 모은다.
+
+    마우스 위치는 스크롤을 시작하기 전, 목록이 아직 그대로일 때 딱 한 번만 계산해서
+    고정한다. 스크롤 도중에 다시 계산하면 화면 밖으로 스크롤된 항목의 좌표를 잘못
+    짚어서 마우스가 지도 쪽으로 빠지고, 그러면 지도가 움직여버리는 문제가 있었다.
     """
     _hover_over_list(page, search_frame)
 
     texts = _current_list_item_texts(search_frame)
     stable_rounds = 0
     for _ in range(max_scrolls):
-        _hover_over_list(page, search_frame)  # 스크롤되며 목록 위치가 바뀔 수 있어 매번 다시 확인
         page.mouse.wheel(0, 2000)
         page.wait_for_timeout(700)
         new_texts = _current_list_item_texts(search_frame)
