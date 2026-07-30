@@ -74,12 +74,27 @@ def search_restaurants():
     return list(results.values())
 
 
+def _parse_review_count(text):
+    """'리뷰 1.1만', '리뷰 1,234', '방문자리뷰 966' 같은 표기에서 숫자를 뽑아낸다.
+
+    네이버 플레이스는 리뷰가 많으면 '1.1만'처럼 만/천 단위로 줄여서 보여준다.
+    """
+    match = re.search(r"리뷰\s*([\d,]+(?:\.\d+)?)\s*(만|천)?", text)
+    if not match:
+        return None
+
+    value = float(match.group(1).replace(",", ""))
+    unit = match.group(2)
+    if unit == "만":
+        value *= 10000
+    elif unit == "천":
+        value *= 1000
+
+    return int(value)
+
+
 def get_review_count(page, name, address):
     """네이버 지도에서 가게 이름+주소로 검색해 들어간 뒤, 리뷰 개수를 읽어온다.
-
-    네이버 플레이스는 '방문자리뷰'와 '블로그리뷰'를 따로 보여주고
-    하나로 합친 '총 리뷰 수'는 제공하지 않는 경우가 많아,
-    이 함수는 두 값을 더한 것을 '리뷰개수'로 취급한다.
 
     반환값: (리뷰개수 또는 None, 실패 원인을 설명하는 디버그 문자열 또는 None)
     """
@@ -108,21 +123,16 @@ def get_review_count(page, name, address):
         )
         return None, debug
 
-    visitor = re.search(r"방문자\s*리뷰\s*([\d,]+)", body_text)
-    blog = re.search(r"블로그\s*리뷰\s*([\d,]+)", body_text)
-
-    if not visitor and not blog:
+    review_count = _parse_review_count(body_text)
+    if review_count is None:
         debug = (
-            f"'방문자리뷰'/'블로그리뷰' 글자를 페이지에서 못 찾았습니다.\n"
+            f"'리뷰' 뒤에 오는 숫자를 페이지에서 못 찾았습니다.\n"
             f"현재 페이지 URL: {page.url}\n"
             f"entryIframe에서 읽은 글자 (앞부분 800자):\n{body_text[:800]}"
         )
         return None, debug
 
-    visitor_count = int(visitor.group(1).replace(",", "")) if visitor else 0
-    blog_count = int(blog.group(1).replace(",", "")) if blog else 0
-
-    return visitor_count + blog_count, None
+    return review_count, None
 
 
 def main():
