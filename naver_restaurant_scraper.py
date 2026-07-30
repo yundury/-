@@ -206,15 +206,31 @@ def _go_to_next_page(search_frame):
     return False
 
 
+def _hover_over_list(page, search_frame):
+    """가게 목록 항목 위로 마우스를 옮긴다. 목록 바깥(지도 등)에서 휠을 돌리면
+    목록이 아니라 다른 곳이 스크롤돼서, 실제 목록 카드의 화면 좌표를 찾아 그 위로
+    옮긴 뒤 스크롤해야 한다. 좌표를 못 구하면 대략적인 위치로 대신한다.
+    """
+    try:
+        box = search_frame.locator("li").first.bounding_box()
+        if box:
+            page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+            return
+    except Exception:
+        pass
+    page.mouse.move(200, 500)
+
+
 def _scroll_current_page(page, search_frame, max_scrolls=25, stable_limit=3):
     """한 페이지 안에서는 무한 스크롤로 계속 더 불러와진다. 더 이상 새 항목이
     안 늘어날 때까지(또는 max_scrolls번 스크롤할 때까지) 마우스 휠로 내리면서 모은다.
     """
-    page.mouse.move(200, 500)
+    _hover_over_list(page, search_frame)
 
     texts = _current_list_item_texts(search_frame)
     stable_rounds = 0
     for _ in range(max_scrolls):
+        _hover_over_list(page, search_frame)  # 스크롤되며 목록 위치가 바뀔 수 있어 매번 다시 확인
         page.mouse.wheel(0, 2000)
         page.wait_for_timeout(700)
         new_texts = _current_list_item_texts(search_frame)
@@ -347,7 +363,15 @@ def _try_get_extra_info(page, name):
         # 'AI 브리핑' 제목/안내 문구는 스크롤 없이도 바로 뜨지만, 실제 요약
         # 문장(동그라미 항목들)은 한 번 더 로딩돼야 나온다. 그 실제 내용이 뜰 때만
         # 나오는 "정리한 정보는 다음과 같습니다" 문구가 보일 때까지 스크롤한다.
-        page.mouse.move(220, 400)
+        # (창 크기에 따라 위치가 달라질 수 있어 정보 패널의 실제 화면 좌표를 찾아 그 위에서 스크롤한다.)
+        try:
+            box = entry_frame.locator("body").bounding_box()
+            if box:
+                page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+            else:
+                page.mouse.move(220, 400)
+        except Exception:
+            page.mouse.move(220, 400)
         for _ in range(8):
             if "정리한 정보는 다음과 같습니다" in body_text:
                 break
