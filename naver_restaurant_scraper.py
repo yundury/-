@@ -42,6 +42,20 @@ FONT_NAME = "나눔바른고딕"
 HEADER_FILL = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")
 
 
+class _NullStopEvent:
+    """중지 신호를 안 받는 경우(터미널에서 바로 실행할 때 등) 쓰는 빈 자리표시자.
+
+    threading.Event()와 똑같이 .is_set()을 갖고 있어서, 중지 기능이 있는
+    launcher.py에서 넘겨준 진짜 이벤트든, 이 빈 이벤트든 코드에서 똑같이 다룰 수 있다.
+    """
+
+    def is_set(self):
+        return False
+
+
+_NO_STOP = _NullStopEvent()
+
+
 def _district_only(address):
     """'서울 강남구 도산대로1길 10' -> '서울 강남구'처럼 구까지만 남긴다."""
     parts = address.split()
@@ -256,7 +270,7 @@ def _read_entry_category(page, entry_frame, max_attempts=6):
     return ""
 
 
-def _current_list_rows(page, search_frame, min_reviews, visited):
+def _current_list_rows(page, search_frame, min_reviews, visited, stop_event=_NO_STOP):
     """지금 화면에 있는 목록 항목들 중 '리뷰'가 포함된 것만 정보를 뽑아서 가져온다.
 
     (화면 밖으로 스크롤되면 항목이 DOM에서 사라지는 경우가 있어서, 스크롤하며
@@ -267,10 +281,15 @@ def _current_list_rows(page, search_frame, min_reviews, visited):
     실제 지도 링크(page.url)를 가져온다. 목록 페이지를 새로 열지 않고, 지금 열려
     있는 목록에서 바로 클릭하는 거라 상세 페이지를 매번 새로 여는 것보다 훨씬
     빠르다. (기준 미달 항목은 클릭하지 않고 건너뛴다.)
+
+    stop_event가 신호를 받으면(중지 버튼 등), 클릭하며 하나씩 확인하는 걸
+    멈추고 지금까지 모은 것만 돌려준다.
     """
     items = search_frame.locator("li").all()
     rows = []
     for it in items:
+        if stop_event.is_set():
+            break
         try:
             text = it.inner_text(timeout=2000)
         except Exception:
@@ -355,7 +374,9 @@ def _hover_over_list(page, search_frame):
     page.mouse.move(200, 500)
 
 
-def _scroll_current_page(page, search_frame, min_reviews, visited, max_scrolls=25, stable_limit=4):
+def _scroll_current_page(
+    page, search_frame, min_reviews, visited, stop_event=_NO_STOP, max_scrolls=25, stable_limit=4
+):
     """한 페이지 안에서는 무한 스크롤로 계속 더 불러와진다. 더 이상 새 항목이
     안 늘어날 때까지(또는 max_scrolls번 스크롤할 때까지) 마우스 휠로 내리면서 모은다.
 
@@ -372,12 +393,14 @@ def _scroll_current_page(page, search_frame, min_reviews, visited, max_scrolls=2
     collected = {}
 
     def _merge_current():
-        for row in _current_list_rows(page, search_frame, min_reviews, visited):
+        for row in _current_list_rows(page, search_frame, min_reviews, visited, stop_event):
             collected.setdefault(row["가게이름"], row)
 
     _merge_current()
     stable_rounds = 0
     for _ in range(max_scrolls):
+        if stop_event.is_set():
+            break
         page.mouse.wheel(0, 1500)
         page.wait_for_timeout(1200)  # 새 카드가 로딩될 시간을 넉넉히 준다
         prev_count = len(collected)
@@ -393,7 +416,7 @@ def _scroll_current_page(page, search_frame, min_reviews, visited, max_scrolls=2
     return list(collected.values())
 
 
-def _collect_list_items_across_pages(page, max_pages, min_reviews):
+def _collect_list_items_across_pages(page, max_pages, min_reviews, stop_event=_NO_STOP):
     """검색 결과 목록은 한 페이지 안에서 무한 스크롤로 꽤 많이 불러와지고,
     그 스크롤이 끝나면 '페이지 번호(1,2,3...)'로 다음 목록으로 넘어가는 구조다.
     한 페이지를 끝까지 스크롤해서 다 모은 뒤, '다음 페이지' 버튼을 눌러가며 반복한다.
@@ -403,11 +426,16 @@ def _collect_list_items_across_pages(page, max_pages, min_reviews):
     visited = set()  # 이미 클릭해서 상세정보를 가져온 가게 이름 (중복 클릭 방지)
 
     for page_num in range(1, max_pages + 1):
+        if stop_event.is_set():
+            break
         page.wait_for_timeout(800)  # 페이지 전환 후 목록이 그려질 시간을 준다
-        page_rows = _scroll_current_page(page, search_frame, min_reviews, visited)
+        page_rows = _scroll_current_page(page, search_frame, min_reviews, visited, stop_event)
         for row in page_rows:
             all_rows.setdefault(row["가게이름"], row)
         print(f"    {page_num}페이지: 리뷰 {min_reviews}개 이상 {len(page_rows)}곳")
+
+        if stop_event.is_set():
+            break
 
         if page_num < max_pages:
             moved = _go_to_next_page(search_frame)
@@ -419,77 +447,91 @@ def _collect_list_items_across_pages(page, max_pages, min_reviews):
     return list(all_rows.values())
 
 
-def collect_candidates():
+def collect_candidates(stop_event=None):
     """config.py에 있는 지역 x 음식종류 조합마다 네이버 지도에서 검색 -> 목록 스크롤
     -> 리뷰 1000개 이상인 후보만 골라 모은다. (browser context/page는 이 함수 안에서
     새로 열고 닫는다.)
+
+    stop_event가 신호를 받거나(launcher.py의 "중지" 버튼) Ctrl+C로 중단하면,
+    처리 중이던 지점에서 멈추고 그때까지 모은 후보만 돌려준다.
     """
+    stop_event = stop_event or _NO_STOP
     candidates = {}
     debug_shown = False
 
     with sync_playwright() as p:
         context, page = _open_browser(p)
 
-        for group in config.PRODUCT_GROUPS:
-            query = f"{config.DISTRICT} {group}"
-            print(f"'{query}' 검색 중...")
-            page.goto(f"https://map.naver.com/p/search/{quote(query)}", timeout=30000)
+        try:
+            for group in config.PRODUCT_GROUPS:
+                if stop_event.is_set():
+                    print("중지 요청을 받아 검색을 멈춥니다. 지금까지 모은 것만 저장합니다.")
+                    break
 
-            state = _wait_for_list_or_entry(page)
+                query = f"{config.DISTRICT} {group}"
+                print(f"'{query}' 검색 중...")
+                page.goto(f"https://map.naver.com/p/search/{quote(query)}", timeout=30000)
 
-            if state == "entry":
-                # 검색 결과가 통째로 1건뿐이라 목록 없이 바로 상세 페이지로 들어간 경우
-                try:
-                    entry_frame = page.frame_locator("#entryIframe")
-                    body_text = entry_frame.locator("body").inner_text(timeout=10000)
-                    review_count = _parse_review_count(body_text)
-                    name, _ = _extract_name_and_category(body_text)
-                    category = _category_from_status_line(body_text)
-                    if review_count is not None and review_count >= config.MIN_REVIEW_COUNT and name:
-                        candidates.setdefault(name, {
-                            "가게이름": name,
-                            "상품군": group,
-                            "카테고리": category,
-                            "네이버지도 주소": page.url,
-                            "리뷰수": review_count,
-                            "브랜드설명": "",
-                        })
-                except Exception as e:
-                    print(f"  -> 상세 페이지를 읽지 못했습니다: {e}")
-            elif state == "list":
-                rows = _collect_list_items_across_pages(
-                    page, max_pages=config.MAX_LIST_PAGES, min_reviews=config.MIN_REVIEW_COUNT
-                )
+                state = _wait_for_list_or_entry(page)
 
-                if not debug_shown:
-                    print("  ---- (목록이 잘 읽히는지 확인용) 처음 3곳 추출 결과 ----")
-                    for row in rows[:3]:
-                        print("  >>>", {k: v for k, v in row.items()})
-                    print("  --------------------------------------------------------")
-                    debug_shown = True
+                if state == "entry":
+                    # 검색 결과가 통째로 1건뿐이라 목록 없이 바로 상세 페이지로 들어간 경우
+                    try:
+                        entry_frame = page.frame_locator("#entryIframe")
+                        body_text = entry_frame.locator("body").inner_text(timeout=10000)
+                        review_count = _parse_review_count(body_text)
+                        name, _ = _extract_name_and_category(body_text)
+                        category = _category_from_status_line(body_text)
+                        if review_count is not None and review_count >= config.MIN_REVIEW_COUNT and name:
+                            candidates.setdefault(name, {
+                                "가게이름": name,
+                                "상품군": group,
+                                "카테고리": category,
+                                "네이버지도 주소": page.url,
+                                "리뷰수": review_count,
+                                "브랜드설명": "",
+                            })
+                    except Exception as e:
+                        print(f"  -> 상세 페이지를 읽지 못했습니다: {e}")
+                elif state == "list":
+                    rows = _collect_list_items_across_pages(
+                        page,
+                        max_pages=config.MAX_LIST_PAGES,
+                        min_reviews=config.MIN_REVIEW_COUNT,
+                        stop_event=stop_event,
+                    )
 
-                found_in_query = 0
-                for row in rows:
-                    if row["리뷰수"] < config.MIN_REVIEW_COUNT:
-                        continue
-                    name = row["가게이름"]
-                    if name not in candidates:
-                        candidates[name] = {
-                            "가게이름": name,
-                            "상품군": group,
-                            "카테고리": row["카테고리"],
-                            "네이버지도 주소": row["네이버지도 주소"],
-                            "리뷰수": row["리뷰수"],
-                            "브랜드설명": row["브랜드설명"],
-                        }
-                        found_in_query += 1
-                print(f"  -> 목록 {len(rows)}개 중 리뷰 {config.MIN_REVIEW_COUNT}개 이상 신규 {found_in_query}곳")
-            else:
-                print("  -> 목록도 상세 페이지도 뜨지 않았습니다 (타임아웃). 건너뜁니다.")
+                    if not debug_shown:
+                        print("  ---- (목록이 잘 읽히는지 확인용) 처음 3곳 추출 결과 ----")
+                        for row in rows[:3]:
+                            print("  >>>", {k: v for k, v in row.items()})
+                        print("  --------------------------------------------------------")
+                        debug_shown = True
 
-            time.sleep(random.uniform(2.0, 4.0))
+                    found_in_query = 0
+                    for row in rows:
+                        if row["리뷰수"] < config.MIN_REVIEW_COUNT:
+                            continue
+                        name = row["가게이름"]
+                        if name not in candidates:
+                            candidates[name] = {
+                                "가게이름": name,
+                                "상품군": group,
+                                "카테고리": row["카테고리"],
+                                "네이버지도 주소": row["네이버지도 주소"],
+                                "리뷰수": row["리뷰수"],
+                                "브랜드설명": row["브랜드설명"],
+                            }
+                            found_in_query += 1
+                    print(f"  -> 목록 {len(rows)}개 중 리뷰 {config.MIN_REVIEW_COUNT}개 이상 신규 {found_in_query}곳")
+                else:
+                    print("  -> 목록도 상세 페이지도 뜨지 않았습니다 (타임아웃). 건너뜁니다.")
 
-        context.close()
+                time.sleep(random.uniform(2.0, 4.0))
+        except KeyboardInterrupt:
+            print("\n중단 요청(Ctrl+C)을 받아 검색을 멈춥니다. 지금까지 모은 것만 저장합니다.")
+        finally:
+            context.close()
 
     return list(candidates.values())
 
@@ -652,13 +694,16 @@ def save_excel(rows, output_file):
     wb.save(output_file)
 
 
-def main():
+def main(stop_event=None):
     """가게이름/상품군/카테고리/지도링크/리뷰수/브랜드설명을 전부 검색 목록
     단계에서만 뽑아서 바로 엑셀로 저장한다. (개별 상세 페이지는 더 이상 방문하지
     않는다 - 목록에 이미 필요한 정보가 다 있고, 하나씩 들어가면 훨씬 느려진다.
     더 정확한 정보가 필요하면 get_extra_info()를 다시 불러 쓸 수 있다.)
+
+    stop_event(threading.Event 등)로 중간에 멈추거나 터미널에서 Ctrl+C를 눌러도,
+    그때까지 모은 가게는 그대로 엑셀로 저장된다.
     """
-    candidates = collect_candidates()
+    candidates = collect_candidates(stop_event=stop_event)
     if not candidates:
         print(f"리뷰 {config.MIN_REVIEW_COUNT}개 이상인 가게가 없습니다. config.py의 검색 조건을 확인하세요.")
         return
@@ -673,4 +718,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n프로그램을 중단했습니다.")

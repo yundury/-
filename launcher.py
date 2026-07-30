@@ -31,11 +31,12 @@ class _QueueWriter:
         pass
 
 
-def _run_scraper_in_thread(district, groups_text, min_reviews, log_queue):
+def _run_scraper_in_thread(district, groups_text, min_reviews, log_queue, stop_event):
     """실제 크롤링을 별도 스레드에서 실행한다 (창이 멈추지 않도록).
 
     config.py의 값들을 입력받은 값으로 덮어쓴 뒤, 기존 크롤링 코드(main())를
-    그대로 호출한다.
+    그대로 호출한다. stop_event는 "중지" 버튼을 눌렀을 때 크롤링 쪽에 신호를
+    보내서, 지금까지 모은 것만이라도 저장하고 멈추게 한다.
     """
     config.DISTRICT = district
     config.PRODUCT_GROUPS = [g.strip() for g in groups_text.replace(",", "\n").split("\n") if g.strip()]
@@ -48,7 +49,7 @@ def _run_scraper_in_thread(district, groups_text, min_reviews, log_queue):
     old_stdout = sys.stdout
     sys.stdout = _QueueWriter(log_queue)
     try:
-        scraper.main()
+        scraper.main(stop_event=stop_event)
     except Exception as e:
         log_queue.put(f"\n오류가 발생했습니다: {e}\n")
     finally:
@@ -65,6 +66,8 @@ LABEL_COLOR = "#495057"
 INPUT_BORDER = "#dee2e6"   # 입력창 테두리 (평소)
 ACCENT_COLOR = "#3b82f6"   # 포인트 블루 (포커스/버튼)
 ACCENT_HOVER = "#2563eb"   # 버튼 위에 마우스 올렸을 때
+STOP_COLOR = "#ef4444"     # 중지 버튼 (빨강)
+STOP_HOVER = "#dc2626"
 TITLE_TEXT = "🦅 독수리오형제 Project"
 
 
@@ -91,16 +94,32 @@ class App:
         self.groups_entry = self._add_field(card, 2, "검색메뉴", ", ".join(config.PRODUCT_GROUPS))
         self.review_entry = self._add_field(card, 3, "기준 리뷰수", str(config.MIN_REVIEW_COUNT))
 
+        button_row = tk.Frame(card, bg=CARD_BG)
+        button_row.grid(row=4, column=1, sticky="e", pady=(20, 0))
+
+        self.stop_button = tk.Button(
+            button_row, text="중지", command=self.stop,
+            bg=STOP_COLOR, fg="white", font=("맑은 고딕", 11, "bold"),
+            padx=24, pady=8, relief="flat", bd=0,
+            activebackground=STOP_HOVER, activeforeground="white",
+            cursor="hand2", state="disabled",
+        )
+        self.stop_button.pack(side="left", padx=(0, 8))
+        self.stop_button.bind("<Enter>", lambda e: self._set_stop_hover(True))
+        self.stop_button.bind("<Leave>", lambda e: self._set_stop_hover(False))
+
         self.run_button = tk.Button(
-            card, text="실행", command=self.start,
+            button_row, text="실행", command=self.start,
             bg=ACCENT_COLOR, fg="white", font=("맑은 고딕", 11, "bold"),
             padx=24, pady=8, relief="flat", bd=0,
             activebackground=ACCENT_HOVER, activeforeground="white",
             cursor="hand2",
         )
-        self.run_button.grid(row=4, column=1, sticky="e", pady=(20, 0))
+        self.run_button.pack(side="left")
         self.run_button.bind("<Enter>", lambda e: self._set_button_hover(True))
         self.run_button.bind("<Leave>", lambda e: self._set_button_hover(False))
+
+        self.stop_event = None
 
         self.log_box = scrolledtext.ScrolledText(
             root, width=100, height=22, state="disabled",
@@ -140,12 +159,19 @@ class App:
             return
         self.run_button.configure(bg=ACCENT_HOVER if hovering else ACCENT_COLOR)
 
+    def _set_stop_hover(self, hovering):
+        if str(self.stop_button["state"]) == "disabled":
+            return
+        self.stop_button.configure(bg=STOP_HOVER if hovering else STOP_COLOR)
+
     def _poll_queue(self):
         try:
             while True:
                 text = self.log_queue.get_nowait()
                 if text == "__DONE__":
                     self.run_button.configure(state="normal", text="실행", bg=ACCENT_COLOR)
+                    self.stop_button.configure(state="disabled", bg=STOP_COLOR)
+                    self.stop_event = None
                     self._append_log("\n===== 완료! 결과 엑셀 파일을 확인하세요 =====\n")
                 else:
                     self._append_log(text)
@@ -169,14 +195,23 @@ class App:
             return
 
         self.run_button.configure(state="disabled", text="실행 중...", bg="#93c5fd")
+        self.stop_button.configure(state="normal", bg=STOP_COLOR)
         self._append_log(f"\n===== '{district} / {groups_text}' (리뷰 {min_reviews}개 이상) 검색 시작 =====\n")
 
+        self.stop_event = threading.Event()
         thread = threading.Thread(
             target=_run_scraper_in_thread,
-            args=(district, groups_text, min_reviews, self.log_queue),
+            args=(district, groups_text, min_reviews, self.log_queue, self.stop_event),
             daemon=True,
         )
         thread.start()
+
+    def stop(self):
+        if self.stop_event is None:
+            return
+        self.stop_event.set()
+        self.stop_button.configure(state="disabled", bg=STOP_COLOR)
+        self._append_log("\n===== 중지 요청함 - 지금까지 모은 것만 저장하고 곧 끝납니다 =====\n")
 
 
 def main():
