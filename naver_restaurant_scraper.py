@@ -288,9 +288,20 @@ def _current_list_rows(page, search_frame, min_reviews, visited):
 
         category, map_url = "", ""
         try:
-            it.click(timeout=3000)
+            # 카드 전체를 클릭하면(기본은 가운데를 클릭) 카드 안의 사진 영역을
+            # 눌러서 '홈'이 아니라 '사진' 탭으로 들어가버리는 문제가 있었다.
+            # 사진이 없는 카드 위쪽(이름이 있는 부분)을 짚어서 클릭한다.
+            it.click(position={"x": 10, "y": 10}, timeout=3000)
             page.wait_for_timeout(600)
             entry_frame = page.frame_locator("#entryIframe")
+            # 혹시 그래도 '사진' 등 다른 탭으로 들어갔다면 '홈' 탭을 눌러 되돌아온다.
+            try:
+                home_tab = entry_frame.get_by_role("link", name="홈", exact=True)
+                if home_tab.count() > 0:
+                    home_tab.first.click(timeout=1500)
+                    page.wait_for_timeout(400)
+            except Exception:
+                pass
             category = _read_entry_category(page, entry_frame)
             map_url = page.url
         except Exception:
