@@ -1,7 +1,11 @@
 """
 네이버 지도에서 지역+음식종류로 검색한 뒤, 검색 결과 목록을 스크롤해서 모으고
-(목록에 이미 나오는 리뷰 수로 1차로 걸러낸 다음), 살아남은 가게만 상세 페이지에
-들어가서 주소/카테고리/AI 브리핑/지도 링크까지 채워 엑셀로 저장하는 스크립트.
+(목록에 이미 나오는 리뷰 수/리뷰 글 한 줄로 1차 정보를 채운 다음), 살아남은
+가게만 상세 페이지에 들어가서 주소/카테고리/지도 링크까지 채워 엑셀로 저장하는 스크립트.
+
+'AI 브리핑'을 읽어오는 코드(_parse_ai_briefing)는 남겨두었지만 기본 흐름에서는
+쓰지 않는다. 상세 페이지에서 AI 브리핑이 뜰 때까지 스크롤/대기하는 과정이 가게당
+몇 초씩 더 걸려서, 대신 목록에 이미 나와 있는 리뷰 글 한 줄을 '브랜드설명'으로 쓴다.
 
 네이버 지역검색 API는 더 이상 쓰지 않는다 (검색어당 5개 제한이 있고, 어차피
 목록 화면에 리뷰 수가 그대로 보이기 때문). API 키도 필요 없다.
@@ -78,21 +82,52 @@ def _strip_trailing_badges(name):
     return name.strip()
 
 
+# 목록 항목 텍스트에서 리뷰 글(자유 문장)이 아닌, 구조적으로 나오는 문구들.
+# 리뷰 글을 뽑을 때 이런 줄은 제외한다.
+_STRUCTURAL_HINTS = ("혜택", "쿠폰", "포인트", "리뷰", "예약", "톡톡", "광고", "connect+", "포장주문")
+
+
+def _extract_review_snippet(lines):
+    """목록 카드 안에 보이는 짧은 리뷰 후기 한 줄을 뽑아낸다.
+
+    카드 아래쪽에 실제 리뷰어가 쓴 문장이 그대로 나오는 경우가 많다. 이름/카테고리/
+    배지/리뷰수 같은 '구조적인' 줄들을 제외하고 남는 자유 문장 중, 말줄임표(...)로
+    끝나지 않는(=안 잘린) 문장을 우선으로 마지막(카드 아래쪽에 가까운) 것을 고른다.
+    """
+    candidates = [l for l in lines if len(l) >= 8 and not any(h in l for h in _STRUCTURAL_HINTS)]
+    if not candidates:
+        return ""
+
+    complete = [c for c in candidates if not c.endswith("...") and not c.endswith("…")]
+    pool = complete if complete else candidates
+    return pool[-1]
+
+
 def _parse_list_item(text):
-    """검색 결과 '목록'에 나오는 항목 하나의 텍스트에서 (가게이름, 리뷰수)를 뽑아낸다.
+    """검색 결과 '목록'에 나오는 항목 하나의 텍스트에서 정보를 뽑아낸다.
 
     목록의 각 항목은 보통 첫 줄이 가게 이름이고, 어딘가에 '리뷰 N' 형태로
     리뷰 수가 나온다. 리뷰 수가 없는 항목(광고/필터 칩 등)은 걸러진다.
+
+    반환값: {"가게이름":..., "리뷰수":..., "브랜드설명":...} 또는 None
     """
     review_count = _parse_review_count(text)
     if review_count is None:
         return None
 
-    first_line = _strip_trailing_badges(text.strip().split("\n")[0].strip())
-    if not first_line:
+    lines = [l.strip() for l in text.strip().split("\n") if l.strip()]
+    if not lines:
         return None
 
-    return first_line, review_count
+    name = _strip_trailing_badges(lines[0])
+    if not name:
+        return None
+
+    return {
+        "가게이름": name,
+        "리뷰수": review_count,
+        "브랜드설명": _extract_review_snippet(lines),
+    }
 
 
 def _extract_name_and_category(body_text):
@@ -301,7 +336,9 @@ def collect_candidates():
                     review_count = _parse_review_count(body_text)
                     name, _ = _extract_name_and_category(body_text)
                     if review_count is not None and review_count >= config.MIN_REVIEW_COUNT and name:
-                        candidates.setdefault(name, {"가게이름": name, "상품군": group, "리뷰수": review_count})
+                        candidates.setdefault(
+                            name, {"가게이름": name, "상품군": group, "리뷰수": review_count, "브랜드설명": ""}
+                        )
                 except Exception as e:
                     print(f"  -> 상세 페이지를 읽지 못했습니다: {e}")
             elif state == "list":
@@ -312,19 +349,28 @@ def collect_candidates():
                     for t in item_texts[:3]:
                         print("  >>>", repr(t))
                     print("  --------------------------------------------------------")
-                    debug_shown = True
 
                 found_in_query = 0
+                debug_parsed_shown = 0
                 for text in item_texts:
                     parsed = _parse_list_item(text)
                     if not parsed:
                         continue
-                    name, review_count = parsed
-                    if review_count < config.MIN_REVIEW_COUNT:
+                    if parsed["리뷰수"] < config.MIN_REVIEW_COUNT:
                         continue
+                    if not debug_shown and debug_parsed_shown < 3:
+                        print(f"  ---- (브랜드설명 추출 확인용) {parsed['가게이름']!r} -> {parsed['브랜드설명']!r}")
+                        debug_parsed_shown += 1
+                    name = parsed["가게이름"]
                     if name not in candidates:
-                        candidates[name] = {"가게이름": name, "상품군": group, "리뷰수": review_count}
+                        candidates[name] = {
+                            "가게이름": name,
+                            "상품군": group,
+                            "리뷰수": parsed["리뷰수"],
+                            "브랜드설명": parsed["브랜드설명"],
+                        }
                         found_in_query += 1
+                debug_shown = True
                 print(f"  -> 목록 {len(item_texts)}개 중 리뷰 {config.MIN_REVIEW_COUNT}개 이상 신규 {found_in_query}곳")
             else:
                 print("  -> 목록도 상세 페이지도 뜨지 않았습니다 (타임아웃). 건너뜁니다.")
@@ -337,8 +383,10 @@ def collect_candidates():
 
 
 def _try_get_extra_info(page, name):
-    """가게 이름으로 다시 검색해 상세 페이지에 들어가서 주소/카테고리/AI 브리핑/
-    지도 링크를 읽어온다. (리뷰 수는 목록 단계에서 이미 구했으므로 여기서는 안 읽는다.)
+    """가게 이름으로 다시 검색해 상세 페이지에 들어가서 주소/카테고리/지도 링크를
+    읽어온다. (리뷰 수와 브랜드설명은 목록 단계에서 이미 구했으므로 여기서는 안 읽는다.
+    AI 브리핑까지 기다리는 스크롤 과정이 가게당 몇 초씩 더 걸려서 뺐다 - 필요하면
+    _parse_ai_briefing()을 다시 불러 쓸 수 있다.)
 
     반환값: (정보 dict 또는 None, 실패 원인을 설명하는 디버그 문자열 또는 None)
     """
@@ -363,25 +411,6 @@ def _try_get_extra_info(page, name):
         entry_frame = page.frame_locator("#entryIframe")
         # 상세 페이지(entryIframe)도 내용이 다 그려질 때까지 넉넉하게 기다린다.
         body_text = entry_frame.locator("body").inner_text(timeout=15000)
-
-        # 'AI 브리핑' 제목/안내 문구는 스크롤 없이도 바로 뜨지만, 실제 요약
-        # 문장(동그라미 항목들)은 한 번 더 로딩돼야 나온다. 그 실제 내용이 뜰 때만
-        # 나오는 "정리한 정보는 다음과 같습니다" 문구가 보일 때까지 스크롤한다.
-        # (창 크기에 따라 위치가 달라질 수 있어 정보 패널의 실제 화면 좌표를 찾아 그 위에서 스크롤한다.)
-        try:
-            box = entry_frame.locator("body").bounding_box()
-            if box:
-                page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
-            else:
-                page.mouse.move(220, 400)
-        except Exception:
-            page.mouse.move(220, 400)
-        for _ in range(8):
-            if "정리한 정보는 다음과 같습니다" in body_text:
-                break
-            page.mouse.wheel(0, 1200)
-            page.wait_for_timeout(600)
-            body_text = entry_frame.locator("body").inner_text(timeout=5000)
     except Exception as e:
         frame_names = [f.name or "(이름없음)" for f in page.frames]
 
@@ -404,14 +433,11 @@ def _try_get_extra_info(page, name):
 
     _, category = _extract_name_and_category(body_text)
     address = _district_only(_extract_address(body_text))
-    description, briefing_debug = _parse_ai_briefing(body_text)
 
     info = {
         "카테고리": category,
         "주소": address,
         "네이버지도 주소": page.url,
-        "브랜드설명": description or "",
-        "_브리핑디버그": briefing_debug,
     }
     return info, None
 
@@ -528,7 +554,6 @@ def main():
         context, page = _open_browser(p)
 
         debug_shown = 0
-        briefing_debug_shown = 0
         for i, place in enumerate(candidates, 1):
             print(f"[{i}/{len(candidates)}] 상세정보 확인 중: {place['가게이름']} (리뷰 {place['리뷰수']})")
             try:
@@ -545,13 +570,6 @@ def main():
                     debug_shown += 1
                 continue
 
-            if briefing_debug_shown < 2:
-                print("  ---- (브랜드설명이 맞는지 확인용) AI 브리핑 주변 텍스트 ----")
-                print(f"  현재 추출된 브랜드설명: {info['브랜드설명']!r}")
-                print(f"  {info['_브리핑디버그']}")
-                print("  ------------------------------------------------------------")
-                briefing_debug_shown += 1
-
             final_rows.append({
                 "가게이름": place["가게이름"],
                 "상품군": place["상품군"],
@@ -559,7 +577,7 @@ def main():
                 "주소": info["주소"],
                 "네이버지도 주소": info["네이버지도 주소"],
                 "리뷰수": place["리뷰수"],
-                "브랜드설명": info["브랜드설명"],
+                "브랜드설명": place["브랜드설명"],
             })
 
             # 너무 빠르게 계속 요청하지 않도록 잠깐 대기
