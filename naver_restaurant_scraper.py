@@ -206,16 +206,42 @@ def _go_to_next_page(search_frame):
     return False
 
 
+def _scroll_current_page(page, search_frame, max_scrolls=25, stable_limit=3):
+    """한 페이지 안에서는 무한 스크롤로 계속 더 불러와진다. 더 이상 새 항목이
+    안 늘어날 때까지(또는 max_scrolls번 스크롤할 때까지) 마우스 휠로 내리면서 모은다.
+    """
+    page.mouse.move(200, 500)
+
+    texts = _current_list_item_texts(search_frame)
+    stable_rounds = 0
+    for _ in range(max_scrolls):
+        page.mouse.wheel(0, 2000)
+        page.wait_for_timeout(700)
+        new_texts = _current_list_item_texts(search_frame)
+
+        if len(new_texts) <= len(texts):
+            stable_rounds += 1
+            if stable_rounds >= stable_limit:
+                break
+        else:
+            stable_rounds = 0
+
+        texts = new_texts
+
+    return texts
+
+
 def _collect_list_items_across_pages(page, max_pages):
-    """검색 결과 목록은 무한 스크롤이 아니라 '페이지 번호(1,2,3...)'로 나뉘어 있다.
-    한 페이지 안의 항목을 모두 읽은 뒤, '다음 페이지' 버튼을 눌러가며 반복한다.
+    """검색 결과 목록은 한 페이지 안에서 무한 스크롤로 꽤 많이 불러와지고,
+    그 스크롤이 끝나면 '페이지 번호(1,2,3...)'로 다음 목록으로 넘어가는 구조다.
+    한 페이지를 끝까지 스크롤해서 다 모은 뒤, '다음 페이지' 버튼을 눌러가며 반복한다.
     """
     search_frame = page.frame_locator("#searchIframe")
     all_texts = []
 
     for page_num in range(1, max_pages + 1):
         page.wait_for_timeout(800)  # 페이지 전환 후 목록이 그려질 시간을 준다
-        page_texts = _current_list_item_texts(search_frame)
+        page_texts = _scroll_current_page(page, search_frame)
         all_texts.extend(page_texts)
         print(f"    {page_num}페이지: {len(page_texts)}개 항목")
 
