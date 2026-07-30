@@ -1,10 +1,10 @@
 """
-네이버 지역검색 API로 특정 지역의 한식당 목록을 모으고,
-각 가게의 네이버 플레이스(지도) 페이지에서 리뷰 개수를 가져온 뒤,
+네이버 지역검색 API로 특정 지역의 가게 목록을 모으고,
+각 가게의 네이버 플레이스(지도) 페이지에서 리뷰 개수/AI 브리핑을 가져온 뒤,
 리뷰 개수가 설정한 값 이상인 가게만 엑셀 파일로 저장하는 스크립트.
 
 실행 방법은 README.md를 참고하세요.
-모든 설정값(API 키, 지역, 최소 리뷰 수 등)은 config.py에서 바꿉니다.
+모든 설정값(API 키, 지역, 찾을 음식 종류, 최소 리뷰 수 등)은 config.py에서 바꿉니다.
 """
 
 import os
@@ -14,8 +14,10 @@ import random
 from urllib.parse import quote
 
 import requests
-import pandas as pd
 from playwright.sync_api import sync_playwright
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.utils import get_column_letter
 
 import config
 
@@ -27,9 +29,65 @@ LOCAL_SEARCH_URL = "https://openapi.naver.com/v1/search/local.json"
 # 같은 브라우저 프로필을 계속 재사용해 "이전에도 왔던 사람"처럼 보이게 한다.
 PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browser_profile")
 
+# config.py의 PRODUCT_GROUPS에서 고른 상품군마다 지역검색에 같이 붙일 검색어.
+SEARCH_KEYWORDS_BY_GROUP = {
+    "한식": ["한식", "맛집"],
+    "중식": ["중식", "중국집"],
+    "일식": ["일식", "스시", "돈카츠"],
+    "양식": ["양식", "레스토랑"],
+    "에스닉": ["아시안음식", "베트남음식", "태국음식", "인도음식"],
+    "베이커리": ["베이커리", "빵집"],
+    "디저트": ["디저트", "카페"],
+}
+
+# 최종 엑셀 컬럼 순서
+HEADERS = ["가게이름", "상품군", "카테고리", "주소", "네이버지도 주소", "리뷰수", "브랜드설명"]
+
+# 엑셀 서식에 쓸 값들
+FONT_NAME = "나눔바른고딕"
+HEADER_FILL = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")
+
+
+def _classify_category(category_raw):
+    """네이버가 주는 카테고리 문자열(예: '한식>닭갈비', '음식점>한식>육류,고기요리>돼지고기구이')에서
+    상품군(한식/중식/양식/일식/에스닉/베이커리/디저트)과 세부 카테고리(닭갈비 등)를 뽑아낸다.
+    """
+    segments = [s.strip() for s in category_raw.split(">") if s.strip() and s.strip() != "음식점"]
+
+    keyword_map = [
+        ("한식", ["한식"]),
+        ("중식", ["중식", "중국음식"]),
+        ("일식", ["일식", "일본음식"]),
+        ("양식", ["양식", "이탈리안", "프렌치", "스테이크"]),
+        ("베이커리", ["베이커리", "빵집", "제과"]),
+        ("디저트", ["디저트", "카페"]),
+        ("에스닉", ["아시아음식", "베트남", "태국", "인도음식", "멕시코", "중동음식", "에스닉"]),
+    ]
+
+    product_group = "기타"
+    matched_segment = None
+    for seg in segments:
+        for group, keywords in keyword_map:
+            if any(k in seg for k in keywords):
+                product_group = group
+                matched_segment = seg
+                break
+        if matched_segment:
+            break
+
+    detail_segments = [s for s in segments if s != matched_segment]
+    detail = detail_segments[-1] if detail_segments else ""
+    return product_group, detail
+
+
+def _district_only(address):
+    """'서울특별시 강남구 논현로152길 36 1층' -> '서울특별시 강남구'처럼 구까지만 남긴다."""
+    parts = address.split()
+    return " ".join(parts[:2]) if len(parts) >= 2 else address
+
 
 def search_restaurants():
-    """네이버 지역검색 API로 한식당 후보 목록을 모은다. (이름/주소 기준 중복 제거)"""
+    """네이버 지역검색 API로 config.PRODUCT_GROUPS에 해당하는 가게 후보를 모은다."""
     headers = {
         "X-Naver-Client-Id": config.NAVER_CLIENT_ID,
         "X-Naver-Client-Secret": config.NAVER_CLIENT_SECRET,
@@ -37,10 +95,14 @@ def search_restaurants():
 
     results = {}
 
+    search_keywords = []
+    for group in config.PRODUCT_GROUPS:
+        search_keywords.extend(SEARCH_KEYWORDS_BY_GROUP.get(group, [group]))
+
     queries = [
         f"{config.DISTRICT} {neighborhood} {keyword}"
         for neighborhood in config.NEIGHBORHOODS
-        for keyword in config.KEYWORDS
+        for keyword in search_keywords
     ]
 
     for query in queries:
@@ -60,28 +122,30 @@ def search_restaurants():
         items = resp.json().get("items", [])
         for item in items:
             name = re.sub("<.*?>", "", item.get("title", ""))
-            category = item.get("category", "")
+            category_raw = item.get("category", "")
             address = item.get("roadAddress") or item.get("address", "")
 
-            if config.CATEGORY_FILTER not in category:
+            product_group, detail_category = _classify_category(category_raw)
+            if product_group not in config.PRODUCT_GROUPS:
                 continue
 
             key = (name, address)
             if key not in results:
                 results[key] = {
                     "가게이름": name,
-                    "주소": address,
-                    "카테고리": category,
+                    "상품군": product_group,
+                    "카테고리": detail_category,
+                    "주소": _district_only(address),
                 }
 
         time.sleep(0.3)  # 초당 API 호출 제한을 지키기 위한 짧은 대기
 
-    print(f"지역검색으로 찾은 한식당 후보: {len(results)}곳")
+    print(f"지역검색으로 찾은 후보: {len(results)}곳")
     return list(results.values())
 
 
 def _parse_review_count(text):
-    """'리뷰 1.1만', '리뷰 1,234', '방문자리뷰 966' 같은 표기에서 숫자를 뽑아낸다.
+    """'리뷰 1.1만', '리뷰 1,234' 같은 표기에서 숫자를 뽑아낸다.
 
     네이버 플레이스는 리뷰가 많으면 '1.1만'처럼 만/천 단위로 줄여서 보여준다.
     """
@@ -97,6 +161,33 @@ def _parse_review_count(text):
         value *= 1000
 
     return int(value)
+
+
+def _parse_ai_briefing(text, max_items=2):
+    """'AI 요약'/'AI 브리핑' 라벨 주변의 짧은 소개 문구를 최대 max_items개까지 가져온다.
+
+    네이버 플레이스에서 이 라벨이 정확히 어떤 형태/위치로 나오는지 아직 확실하지 않아서,
+    라벨 앞뒤 글자를 함께 돌려주고(디버그용), 그 중 그럴듯한 쪽을 문구로 사용한다.
+    """
+    match = re.search(r"AI\s*(?:요약|브리핑)", text)
+    if not match:
+        return None, None
+
+    context_before = text[max(0, match.start() - 300):match.start()].strip()
+    context_after = text[match.end():match.end() + 300].strip()
+    debug_context = f"라벨 앞 300자: {context_before!r}\n라벨 뒤 300자: {context_after!r}"
+
+    before_items = [c.strip() for c in re.split(r"[\n·]", context_before) if c.strip()]
+    after_items = [c.strip() for c in re.split(r"[\n·]", context_after) if c.strip()]
+
+    if before_items:
+        description = " / ".join(before_items[-max_items:])
+    elif after_items:
+        description = " / ".join(after_items[:max_items])
+    else:
+        description = None
+
+    return description, debug_context
 
 
 def _wait_for_list_or_entry(page, timeout_ms=15000, poll_ms=300):
@@ -117,8 +208,11 @@ def _wait_for_list_or_entry(page, timeout_ms=15000, poll_ms=300):
     return "timeout"
 
 
-def _try_get_review_count(page, name):
-    """실제로 검색 -> (필요하면) 목록 클릭 -> 상세 페이지 읽기를 한 번 시도한다."""
+def _try_get_place_details(page, name):
+    """실제로 검색 -> (필요하면) 목록 클릭 -> 상세 페이지 읽기를 한 번 시도한다.
+
+    반환값: (상세정보 dict 또는 None, 실패 원인을 설명하는 디버그 문자열 또는 None)
+    """
     # 주소 전체를 검색어로 쓰면 실제 사람이 잘 안 쓰는 특이한 검색어라 자동화로
     # 의심받기 쉬워서, 가게이름 + 지역구 정도로 짧고 자연스러운 검색어를 사용한다.
     query = quote(f"{name} {config.DISTRICT}")
@@ -169,21 +263,29 @@ def _try_get_review_count(page, name):
         )
         return None, debug
 
-    return review_count, None
+    description, briefing_debug = _parse_ai_briefing(body_text)
+
+    details = {
+        "리뷰수": review_count,
+        "네이버지도 주소": page.url,
+        "브랜드설명": description or "",
+        "_브리핑디버그": briefing_debug,
+    }
+    return details, None
 
 
-def get_review_count(page, name, address, max_attempts=2):
-    """네이버 지도에서 가게 이름으로 검색해 들어간 뒤, 리뷰 개수를 읽어온다.
+def get_place_details(page, name, max_attempts=2):
+    """네이버 지도에서 가게 이름으로 검색해 들어간 뒤, 리뷰 수/AI 브리핑/지도 링크를 읽어온다.
 
     타이밍이 꼬여서 실패하는 경우를 대비해 캡차가 아닌 실패는 한 번 더 재시도한다.
 
-    반환값: (리뷰개수 또는 None, 실패 원인을 설명하는 디버그 문자열 또는 None)
+    반환값: (상세정보 dict 또는 None, 실패 원인을 설명하는 디버그 문자열 또는 None)
     """
     debug_info = None
     for attempt in range(1, max_attempts + 1):
-        review_count, debug_info = _try_get_review_count(page, name)
-        if review_count is not None:
-            return review_count, None
+        details, debug_info = _try_get_place_details(page, name)
+        if details is not None:
+            return details, None
 
         if debug_info and "캡차" in debug_info:
             # 캡차는 다시 시도해도 똑같이 막히므로 바로 포기하고 사용자에게 알린다.
@@ -195,10 +297,68 @@ def get_review_count(page, name, address, max_attempts=2):
     return None, debug_info
 
 
+def _display_width(text):
+    """열 너비/줄 수를 어림잡기 위한 글자 폭 계산. 한글 등 넓은 글자는 2칸으로 센다."""
+    width = 0
+    for ch in str(text):
+        width += 2 if ord(ch) > 0x1100 else 1
+    return width
+
+
+def save_excel(rows, output_file):
+    """결과를 엑셀로 저장하면서 열 너비/행 높이 자동 맞춤, 헤더 색상, 폰트를 적용한다."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "결과"
+    ws.append(HEADERS)
+
+    for row in rows:
+        ws.append([row.get(h, "") for h in HEADERS])
+
+    desc_col = HEADERS.index("브랜드설명") + 1
+    link_col = HEADERS.index("네이버지도 주소") + 1
+
+    # 1행(헤더): 회색 배경 + 지정 폰트 + 굵게
+    for cell in ws[1]:
+        cell.font = Font(name=FONT_NAME, bold=True)
+        cell.fill = HEADER_FILL
+
+    # 본문: 폰트 적용, 설명 칸은 줄바꿈 허용, 지도 링크 칸은 클릭 가능한 하이퍼링크로
+    for row_cells in ws.iter_rows(min_row=2):
+        for cell in row_cells:
+            if cell.column == link_col and cell.value:
+                cell.hyperlink = cell.value
+                cell.font = Font(name=FONT_NAME, color="0563C1", underline="single")
+            else:
+                cell.font = Font(name=FONT_NAME)
+            if cell.column == desc_col:
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+    # 열 너비 자동 맞춤 (글자 폭 기준 근사치 - 엑셀의 진짜 자동맞춤과 100% 같지는 않음)
+    for col_index, header in enumerate(HEADERS, start=1):
+        max_width = max(
+            [_display_width(header)] + [_display_width(row.get(header, "")) for row in rows]
+        )
+        cap = 50 if header in ("브랜드설명", "네이버지도 주소") else 40
+        ws.column_dimensions[get_column_letter(col_index)].width = min(max_width + 4, cap)
+
+    # 행 높이 자동 맞춤 (설명 칸이 몇 줄로 접힐지 어림잡아 계산)
+    desc_col_width = ws.column_dimensions[get_column_letter(desc_col)].width or 50
+    for row_index, row in enumerate(rows, start=2):
+        desc_text = str(row.get("브랜드설명", ""))
+        lines_needed = max(1, -(-_display_width(desc_text) // int(desc_col_width)))
+        ws.row_dimensions[row_index].height = max(15, lines_needed * 15)
+
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+
+    wb.save(output_file)
+
+
 def main():
     candidates = search_restaurants()
     if not candidates:
-        print("검색된 한식당이 없습니다. config.py의 검색 조건을 확인하세요.")
+        print("검색된 가게가 없습니다. config.py의 검색 조건을 확인하세요.")
         return
 
     final_rows = []
@@ -224,15 +384,16 @@ def main():
         page = context.new_page()
 
         debug_shown = 0
+        briefing_debug_shown = 0
         for i, place in enumerate(candidates, 1):
-            print(f"[{i}/{len(candidates)}] 리뷰 수 확인 중: {place['가게이름']}")
+            print(f"[{i}/{len(candidates)}] 확인 중: {place['가게이름']}")
             try:
-                review_count, debug_info = get_review_count(page, place["가게이름"], place["주소"])
+                details, debug_info = get_place_details(page, place["가게이름"])
             except Exception as e:
-                review_count, debug_info = None, f"예외 발생: {e}"
+                details, debug_info = None, f"예외 발생: {e}"
 
-            if review_count is None:
-                print("  -> 리뷰 수를 찾지 못했습니다. 건너뜁니다.")
+            if details is None:
+                print("  -> 정보를 찾지 못했습니다. 건너뜁니다.")
                 if debug_info and debug_shown < 2:
                     print("  ========== 디버그 정보 (이 부분을 복사해서 보내주세요) ==========")
                     print(debug_info)
@@ -240,14 +401,25 @@ def main():
                     debug_shown += 1
                 continue
 
+            review_count = details["리뷰수"]
             print(f"  -> 리뷰 수: {review_count}")
+
+            if briefing_debug_shown < 2:
+                print("  ---- (브랜드설명이 맞는지 확인용) AI 요약 라벨 주변 텍스트 ----")
+                print(f"  현재 추출된 브랜드설명: {details['브랜드설명']!r}")
+                print(f"  {details['_브리핑디버그']}")
+                print("  ---------------------------------------------------------------")
+                briefing_debug_shown += 1
 
             if review_count >= config.MIN_REVIEW_COUNT:
                 final_rows.append({
                     "가게이름": place["가게이름"],
-                    "주소": place["주소"],
+                    "상품군": place["상품군"],
                     "카테고리": place["카테고리"],
-                    "리뷰개수": review_count,
+                    "주소": place["주소"],
+                    "네이버지도 주소": details["네이버지도 주소"],
+                    "리뷰수": review_count,
+                    "브랜드설명": details["브랜드설명"],
                 })
 
             # 너무 빠르게 계속 요청하지 않도록 잠깐 대기
@@ -260,10 +432,9 @@ def main():
         print(f"리뷰 {config.MIN_REVIEW_COUNT}개 이상인 가게가 없습니다.")
         return
 
-    df = pd.DataFrame(final_rows, columns=["가게이름", "주소", "카테고리", "리뷰개수"])
-    df = df.sort_values("리뷰개수", ascending=False)
-    df.to_excel(config.OUTPUT_FILE, index=False)
-    print(f"완료! {len(df)}곳을 '{config.OUTPUT_FILE}' 파일로 저장했습니다.")
+    final_rows.sort(key=lambda r: r["리뷰수"], reverse=True)
+    save_excel(final_rows, config.OUTPUT_FILE)
+    print(f"완료! {len(final_rows)}곳을 '{config.OUTPUT_FILE}' 파일로 저장했습니다.")
 
 
 if __name__ == "__main__":
