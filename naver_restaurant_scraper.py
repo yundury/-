@@ -239,14 +239,15 @@ def _try_get_place_details(page, name):
         # 상세 페이지(entryIframe)도 내용이 다 그려질 때까지 넉넉하게 기다린다.
         body_text = entry_frame.locator("body").inner_text(timeout=15000)
 
-        # 'AI 브리핑'은 스크롤을 어느 정도 내려야 나타나는 지연 로딩 영역이라,
-        # 왼쪽 정보 패널 위에서 마우스 휠을 내리면서 나타날 때까지 기다린다.
+        # 'AI 브리핑' 제목/안내 문구는 스크롤 없이도 바로 뜨지만, 실제 요약
+        # 문장(동그라미 항목들)은 한 번 더 로딩돼야 나온다. 그 실제 내용이 뜰 때만
+        # 나오는 "정리한 정보는 다음과 같습니다" 문구가 보일 때까지 스크롤한다.
         page.mouse.move(220, 400)
-        for _ in range(6):
-            if "브리핑" in body_text:
+        for _ in range(8):
+            if "정리한 정보는 다음과 같습니다" in body_text:
                 break
             page.mouse.wheel(0, 1200)
-            page.wait_for_timeout(500)
+            page.wait_for_timeout(600)
             body_text = entry_frame.locator("body").inner_text(timeout=5000)
     except Exception as e:
         frame_names = [f.name or "(이름없음)" for f in page.frames]
