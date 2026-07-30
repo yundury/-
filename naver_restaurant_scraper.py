@@ -55,6 +55,9 @@ class _NullStopEvent:
 
 _NO_STOP = _NullStopEvent()
 
+# 카테고리 추출용 디버그를 몇 번 보여줬는지 (임시 디버그용, 실행할 때마다 초기화되지는 않음)
+_category_debug_shown = [0]
+
 
 def _district_only(address):
     """'서울 강남구 도산대로1길 10' -> '서울 강남구'처럼 구까지만 남긴다."""
@@ -329,6 +332,15 @@ def _current_list_rows(page, search_frame, min_reviews, visited, stop_event=_NO_
                 pass
             category = _read_entry_category(page, entry_frame)
             map_url = page.url
+
+            if _category_debug_shown[0] < 3:
+                try:
+                    raw = entry_frame.locator("body").inner_text(timeout=1500)
+                except Exception:
+                    raw = "(읽기 실패)"
+                print(f"  ---- (카테고리 디버그) {parsed['가게이름']!r} -> 카테고리={category!r}")
+                print(f"  entry 패널 글자 (앞부분 500자): {raw[:500]!r}")
+                _category_debug_shown[0] += 1
         except Exception:
             pass
 
