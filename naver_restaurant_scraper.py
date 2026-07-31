@@ -232,27 +232,22 @@ def _wait_for_list_or_entry(page, timeout_ms=15000, poll_ms=300):
 def _category_from_status_line(body_text):
     """상세 패널 글자에서 카테고리를 뽑아낸다.
 
-    카테고리가 몇 번째 조각으로 나오는지는 가게마다 다르지만(예: '육류,고기요리 ·
-    리뷰 919', '새로오픈 · 두부요리 · ★4.79 · 리뷰 1,201'), 카테고리는 항상
-    '리뷰' 조각 바로 왼쪽에 나온다. 그 조각이 별점(★4.79)만 있으면 그 앞 조각을
-    대신 쓰고, 별점이 카테고리에 붙어 나오면(예: '두부요리 ★4.79') 그 부분만 잘라낸다.
+    화면에서는 카테고리와 리뷰 수 사이에 가운뎃점(·)이 보이지만, 실제 텍스트를
+    읽어보면 그 점은 없고 예를 들어 '한식리뷰 2,720'처럼 카테고리와 '리뷰'가
+    그냥 붙어서 나온다. '리뷰 숫자' 앞부분을 그대로 카테고리로 쓴다.
     """
     for line in body_text.split("\n"):
-        if "리뷰" not in line or "·" not in line:
+        if "리뷰" not in line:
             continue
 
-        parts = [p.strip() for p in line.split("·") if p.strip()]
-        review_idx = next((i for i, p in enumerate(parts) if "리뷰" in p), None)
-        if review_idx is None or review_idx == 0:
-            return ""
+        match = re.match(r"(.*?)리뷰\s*[\d,]", line)
+        if not match:
+            break
 
-        idx = review_idx - 1
-        while idx >= 0 and re.fullmatch(r"★[\d.]+", parts[idx]):
-            idx -= 1
-        if idx < 0:
-            return ""
-
-        return re.sub(r"★[\d.]+\s*$", "", parts[idx]).strip()
+        category = match.group(1)
+        category = re.sub(r"★[\d.]+", "", category)  # 별점이 붙어 나오면 제거
+        category = category.replace("·", " ")  # 가운뎃점이 있는 경우도 대비
+        return re.sub(r"\s+", " ", category).strip()
 
     return ""
 
