@@ -1,6 +1,6 @@
 """
 네이버 지도에서 지역+음식종류로 검색한 뒤, 검색 결과 목록을 스크롤해서 모으고
-가게이름/카테고리/리뷰수/브랜드설명/지도링크를 전부 그 목록 화면에서만 뽑아
+브랜드명/카테고리/리뷰수/대표 리뷰/지도링크를 전부 그 목록 화면에서만 뽑아
 엑셀로 저장하는 스크립트. 개별 가게의 상세 페이지에는 들어가지 않는다
 (하나씩 들어가면 훨씬 느려지고, 목록에 이미 필요한 정보가 다 있다).
 
@@ -35,10 +35,10 @@ import config
 PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browser_profile")
 
 # 최종 엑셀 컬럼 순서
-HEADERS = ["가게이름", "상품군", "카테고리", "네이버지도 주소", "리뷰수", "브랜드설명"]
+HEADERS = ["브랜드명", "키워드", "카테고리", "리뷰수", "대표 리뷰", "네이버지도주소"]
 
 # 엑셀 서식에 쓸 값들
-FONT_NAME = "나눔바른고딕"
+FONT_NAME = "나눔바른고딕OTF"
 HEADER_FILL = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")
 
 
@@ -134,7 +134,7 @@ def _parse_list_item(text):
     (배지/홍보 문구와 뒤섞여 나옴), 여기서는 채우지 않는다 - 기준 리뷰 수를
     넘는 항목만 클릭해서 상세 패널에서 정확하게 가져온다 (_current_list_rows 참고).
 
-    반환값: {"가게이름", "리뷰수", "브랜드설명"} 또는 None
+    반환값: {"브랜드명", "리뷰수", "대표 리뷰"} 또는 None
     """
     review_count = _parse_review_count(text)
     if review_count is None:
@@ -149,16 +149,16 @@ def _parse_list_item(text):
         return None
 
     return {
-        "가게이름": name,
+        "브랜드명": name,
         "리뷰수": review_count,
-        "브랜드설명": _extract_review_snippet(lines),
+        "대표 리뷰": _extract_review_snippet(lines),
     }
 
 
 def _extract_name_and_category(body_text):
-    """상세 페이지 글자에서 '별점' 바로 앞 두 줄(가게이름, 카테고리)을 뽑아낸다.
+    """상세 페이지 글자에서 '별점' 바로 앞 두 줄(브랜드명, 카테고리)을 뽑아낸다.
 
-    네이버 플레이스 상세 화면은 보통 '...\\n가게이름\\n카테고리\\n별점\\n4.85리뷰...'
+    네이버 플레이스 상세 화면은 보통 '...\\n브랜드명\\n카테고리\\n별점\\n4.85리뷰...'
     순서로 나온다.
     """
     idx = body_text.find("별점")
@@ -300,11 +300,11 @@ def _current_list_rows(page, search_frame, min_reviews, visited, stop_event=_NO_
         parsed = _parse_list_item(text)
         if not parsed:
             continue
-        if parsed["가게이름"] in visited:
+        if parsed["브랜드명"] in visited:
             continue
         if parsed["리뷰수"] < min_reviews:
             continue
-        visited.add(parsed["가게이름"])
+        visited.add(parsed["브랜드명"])
 
         category, map_url = "", ""
         try:
@@ -312,7 +312,7 @@ def _current_list_rows(page, search_frame, min_reviews, visited, stop_event=_NO_
             # 탭으로 들어가버리는 문제가 있었다. 파란색으로 표시되는 가게 이름
             # 링크를 직접 찾아서 그것만 클릭한다.
             try:
-                it.get_by_text(parsed["가게이름"], exact=False).first.click(timeout=3000)
+                it.get_by_text(parsed["브랜드명"], exact=False).first.click(timeout=3000)
             except Exception:
                 it.click(position={"x": 10, "y": 10}, timeout=3000)  # 이름을 못 찾으면 예전 방식으로 대체
             page.wait_for_timeout(600)
@@ -333,14 +333,14 @@ def _current_list_rows(page, search_frame, min_reviews, visited, stop_event=_NO_
                     raw = entry_frame.locator("body").inner_text(timeout=1500)
                 except Exception:
                     raw = "(읽기 실패)"
-                print(f"  ---- (카테고리 디버그) {parsed['가게이름']!r} -> 카테고리={category!r}")
+                print(f"  ---- (카테고리 디버그) {parsed['브랜드명']!r} -> 카테고리={category!r}")
                 print(f"  entry 패널 글자 (앞부분 500자): {raw[:500]!r}")
                 _category_debug_shown[0] += 1
         except Exception:
             pass
 
         parsed["카테고리"] = category
-        parsed["네이버지도 주소"] = map_url
+        parsed["네이버지도주소"] = map_url
         rows.append(parsed)
     return rows
 
@@ -404,7 +404,7 @@ def _scroll_current_page(
 
     def _merge_current():
         for row in _current_list_rows(page, search_frame, min_reviews, visited, stop_event):
-            collected.setdefault(row["가게이름"], row)
+            collected.setdefault(row["브랜드명"], row)
 
     _merge_current()
     stable_rounds = 0
@@ -441,7 +441,7 @@ def _collect_list_items_across_pages(page, max_pages, min_reviews, stop_event=_N
         page.wait_for_timeout(800)  # 페이지 전환 후 목록이 그려질 시간을 준다
         page_rows = _scroll_current_page(page, search_frame, min_reviews, visited, stop_event)
         for row in page_rows:
-            all_rows.setdefault(row["가게이름"], row)
+            all_rows.setdefault(row["브랜드명"], row)
         print(f"    {page_num}페이지: 리뷰 {min_reviews}개 이상 {len(page_rows)}곳")
 
         if stop_event.is_set():
@@ -494,12 +494,12 @@ def collect_candidates(stop_event=None):
                         category = _category_from_status_line(body_text)
                         if review_count is not None and review_count >= config.MIN_REVIEW_COUNT and name:
                             candidates.setdefault(name, {
-                                "가게이름": name,
-                                "상품군": group,
+                                "브랜드명": name,
+                                "키워드": group,
                                 "카테고리": category,
-                                "네이버지도 주소": page.url,
+                                "네이버지도주소": page.url,
                                 "리뷰수": review_count,
-                                "브랜드설명": "",
+                                "대표 리뷰": "",
                             })
                     except Exception as e:
                         print(f"  -> 상세 페이지를 읽지 못했습니다: {e}")
@@ -522,15 +522,15 @@ def collect_candidates(stop_event=None):
                     for row in rows:
                         if row["리뷰수"] < config.MIN_REVIEW_COUNT:
                             continue
-                        name = row["가게이름"]
+                        name = row["브랜드명"]
                         if name not in candidates:
                             candidates[name] = {
-                                "가게이름": name,
-                                "상품군": group,
+                                "브랜드명": name,
+                                "키워드": group,
                                 "카테고리": row["카테고리"],
-                                "네이버지도 주소": row["네이버지도 주소"],
+                                "네이버지도주소": row["네이버지도주소"],
                                 "리뷰수": row["리뷰수"],
-                                "브랜드설명": row["브랜드설명"],
+                                "대표 리뷰": row["대표 리뷰"],
                             }
                             found_in_query += 1
                     print(f"  -> 목록 {len(rows)}개 중 리뷰 {config.MIN_REVIEW_COUNT}개 이상 신규 {found_in_query}곳")
@@ -548,14 +548,14 @@ def collect_candidates(stop_event=None):
 
 def _try_get_extra_info(page, name):
     """가게 이름으로 다시 검색해 상세 페이지에 들어가서 주소/카테고리/지도 링크를
-    읽어온다. (리뷰 수와 브랜드설명은 목록 단계에서 이미 구했으므로 여기서는 안 읽는다.
+    읽어온다. (리뷰 수와 대표 리뷰은 목록 단계에서 이미 구했으므로 여기서는 안 읽는다.
     AI 브리핑까지 기다리는 스크롤 과정이 가게당 몇 초씩 더 걸려서 뺐다 - 필요하면
     _parse_ai_briefing()을 다시 불러 쓸 수 있다.)
 
     반환값: (정보 dict 또는 None, 실패 원인을 설명하는 디버그 문자열 또는 None)
     """
     # 주소 전체를 검색어로 쓰면 실제 사람이 잘 안 쓰는 특이한 검색어라 자동화로
-    # 의심받기 쉬워서, 가게이름 + 지역구 정도로 짧고 자연스러운 검색어를 사용한다.
+    # 의심받기 쉬워서, 브랜드명 + 지역구 정도로 짧고 자연스러운 검색어를 사용한다.
     query = quote(f"{name} {config.DISTRICT}")
     page.goto(f"https://map.naver.com/p/search/{query}", timeout=30000)
 
@@ -601,7 +601,7 @@ def _try_get_extra_info(page, name):
     info = {
         "카테고리": category,
         "주소": address,
-        "네이버지도 주소": page.url,
+        "네이버지도주소": page.url,
     }
     return info, None
 
@@ -664,15 +664,17 @@ def save_excel(rows, output_file):
     for row in rows:
         ws.append([row.get(h, "") for h in HEADERS])
 
-    desc_col = HEADERS.index("브랜드설명") + 1
-    link_col = HEADERS.index("네이버지도 주소") + 1
+    desc_col = HEADERS.index("대표 리뷰") + 1
+    link_col = HEADERS.index("네이버지도주소") + 1
+    center_cols = {HEADERS.index(h) + 1 for h in ("브랜드명", "키워드", "카테고리", "리뷰수")}
 
     # 1행(헤더): 회색 배경 + 지정 폰트 + 굵게
     for cell in ws[1]:
         cell.font = Font(name=FONT_NAME, bold=True)
         cell.fill = HEADER_FILL
 
-    # 본문: 폰트 적용, 설명 칸은 줄바꿈 허용, 지도 링크 칸은 클릭 가능한 하이퍼링크로
+    # 본문: 폰트 적용, 설명 칸은 줄바꿈 허용, 지도 링크 칸은 클릭 가능한 하이퍼링크로,
+    # 브랜드명/키워드/카테고리/리뷰수 칸은 셀 안에서 가운데 정렬
     for row_cells in ws.iter_rows(min_row=2):
         for cell in row_cells:
             if cell.column == link_col and cell.value:
@@ -682,19 +684,21 @@ def save_excel(rows, output_file):
                 cell.font = Font(name=FONT_NAME)
             if cell.column == desc_col:
                 cell.alignment = Alignment(wrap_text=True, vertical="top")
+            elif cell.column in center_cols:
+                cell.alignment = Alignment(horizontal="center", vertical="center")
 
     # 열 너비 자동 맞춤 (글자 폭 기준 근사치 - 엑셀의 진짜 자동맞춤과 100% 같지는 않음)
     for col_index, header in enumerate(HEADERS, start=1):
         max_width = max(
             [_display_width(header)] + [_display_width(row.get(header, "")) for row in rows]
         )
-        cap = 50 if header in ("브랜드설명", "네이버지도 주소") else 40
+        cap = 50 if header in ("대표 리뷰", "네이버지도주소") else 40
         ws.column_dimensions[get_column_letter(col_index)].width = min(max_width + 4, cap)
 
     # 행 높이 자동 맞춤 (설명 칸이 몇 줄로 접힐지 어림잡아 계산)
     desc_col_width = ws.column_dimensions[get_column_letter(desc_col)].width or 50
     for row_index, row in enumerate(rows, start=2):
-        desc_text = str(row.get("브랜드설명", ""))
+        desc_text = str(row.get("대표 리뷰", ""))
         lines_needed = max(1, -(-_display_width(desc_text) // int(desc_col_width)))
         ws.row_dimensions[row_index].height = max(15, lines_needed * 15)
 
@@ -705,7 +709,7 @@ def save_excel(rows, output_file):
 
 
 def main(stop_event=None):
-    """가게이름/상품군/카테고리/지도링크/리뷰수/브랜드설명을 전부 검색 목록
+    """브랜드명/키워드/카테고리/지도링크/리뷰수/대표 리뷰을 전부 검색 목록
     단계에서만 뽑아서 바로 엑셀로 저장한다. (개별 상세 페이지는 더 이상 방문하지
     않는다 - 목록에 이미 필요한 정보가 다 있고, 하나씩 들어가면 훨씬 느려진다.
     더 정확한 정보가 필요하면 get_extra_info()를 다시 불러 쓸 수 있다.)

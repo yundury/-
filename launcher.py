@@ -1,5 +1,5 @@
 """
-config.py를 매번 열어서 고치지 않아도 되도록, 지역/검색 메뉴/희망 리뷰수를
+config.py를 매번 열어서 고치지 않아도 되도록, 지역/키워드/희망 리뷰수를
 입력하는 작은 창(프로그램)입니다. "실행"을 누르면 naver_restaurant_scraper.py의
 크롤링 코드가 그대로 실행됩니다.
 
@@ -91,7 +91,7 @@ class App:
         title.grid(row=0, column=0, columnspan=2, pady=(0, 24))
 
         self.district_entry = self._add_field(card, 1, "희망지역", config.DISTRICT)
-        self.groups_entry = self._add_field(card, 2, "검색메뉴", ", ".join(config.PRODUCT_GROUPS))
+        self.groups_entry = self._add_field(card, 2, "키워드", ", ".join(config.PRODUCT_GROUPS))
         self.review_entry = self._add_field(card, 3, "기준 리뷰수", str(config.MIN_REVIEW_COUNT))
 
         button_row = tk.Frame(card, bg=CARD_BG)
@@ -185,7 +185,7 @@ class App:
         review_text = self.review_entry.get().strip()
 
         if not district or not groups_text:
-            messagebox.showwarning("입력 필요", "지역과 검색 메뉴를 입력해주세요.")
+            messagebox.showwarning("입력 필요", "지역과 키워드를 입력해주세요.")
             return
 
         try:
