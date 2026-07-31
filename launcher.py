@@ -6,7 +6,9 @@ config.py를 매번 열어서 고치지 않아도 되도록, 지역/키워드/�
 실행 방법: python launcher.py
 """
 
+import os
 import queue
+import subprocess
 import sys
 import threading
 import tkinter as tk
@@ -173,11 +175,33 @@ class App:
                     self.stop_button.configure(state="disabled", bg=STOP_COLOR)
                     self.stop_event = None
                     self._append_log("\n===== 완료! 결과 엑셀 파일을 확인하세요 =====\n")
+                    self._notify_done()
                 else:
                     self._append_log(text)
         except queue.Empty:
             pass
         self.root.after(200, self._poll_queue)
+
+    def _notify_done(self):
+        output_path = os.path.abspath(config.OUTPUT_FILE)
+
+        if not os.path.exists(output_path):
+            messagebox.showinfo("완료", "검색이 끝났습니다.\n(저장된 결과 파일을 찾지 못했어요 - 조건에 맞는 가게가 없었을 수 있어요.)")
+            return
+
+        if messagebox.askyesno("완료", f"검색이 끝났습니다!\n\n'{config.OUTPUT_FILE}' 파일을 지금 확인하시겠어요?"):
+            self._open_file(output_path)
+
+    def _open_file(self, path):
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(path)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
+        except Exception as e:
+            messagebox.showwarning("열기 실패", f"파일을 여는 데 실패했습니다: {e}")
 
     def start(self):
         district = self.district_entry.get().strip()
