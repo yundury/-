@@ -84,9 +84,9 @@ def _parse_review_count(text):
     return int(value)
 
 
-# 가게 이름 뒤에 공백 없이 바로 붙어 나올 수 있는 '예약/톡톡/쿠폰' 같은 배지 글자들.
-# 목록 항목 첫 줄에서 이런 배지가 이름에 섞여 나오면 뒤에서부터 잘라낸다.
-_KNOWN_BADGE_WORDS = ["예약", "톡톡", "쿠폰", "포장주문", "발견", "광고"]
+# 이름/카테고리에 공백 없이 바로 붙어 나올 수 있는 '예약/톡톡/쿠폰/새로오픈' 같은
+# 배지 글자들. 목록 항목이나 상세 패널 글자에서 이런 배지가 섞여 나오면 잘라낸다.
+_KNOWN_BADGE_WORDS = ["예약", "톡톡", "쿠폰", "포장주문", "발견", "광고", "새로오픈"]
 
 
 def _strip_trailing_badges(name):
@@ -98,6 +98,17 @@ def _strip_trailing_badges(name):
                 name = name[: -len(badge)]
                 changed = True
     return name.strip()
+
+
+def _strip_leading_badges(text):
+    changed = True
+    while changed:
+        changed = False
+        for badge in _KNOWN_BADGE_WORDS:
+            if text.startswith(badge):
+                text = text[len(badge):]
+                changed = True
+    return text.strip()
 
 
 # 목록 항목 텍스트에서 리뷰 글(자유 문장)이 아닌, 구조적으로 나오는 문구들.
@@ -241,7 +252,7 @@ def _category_from_status_line(body_text):
     if idx != -1:
         lines = [l.strip() for l in body_text[:idx].split("\n") if l.strip()]
         if lines:
-            return lines[-1]
+            return _strip_leading_badges(lines[-1])
 
     for line in body_text.split("\n"):
         if "리뷰" not in line:
@@ -254,7 +265,8 @@ def _category_from_status_line(body_text):
         category = match.group(1)
         category = re.sub(r"★[\d.]+", "", category)  # 별점이 붙어 나오면 제거
         category = category.replace("·", " ")  # 가운뎃점이 있는 경우도 대비
-        return re.sub(r"\s+", " ", category).strip()
+        category = re.sub(r"\s+", " ", category).strip()
+        return _strip_leading_badges(category)
 
     return ""
 
