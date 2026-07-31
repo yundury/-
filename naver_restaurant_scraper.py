@@ -230,12 +230,19 @@ def _wait_for_list_or_entry(page, timeout_ms=15000, poll_ms=300):
 
 
 def _category_from_status_line(body_text):
-    """상세 패널 글자에서 카테고리를 뽑아낸다.
+    """상세 패널 글자에서 카테고리를 뽑아낸다. 두 가지 화면 형태가 섞여 있다.
 
-    화면에서는 카테고리와 리뷰 수 사이에 가운뎃점(·)이 보이지만, 실제 텍스트를
-    읽어보면 그 점은 없고 예를 들어 '한식리뷰 2,720'처럼 카테고리와 '리뷰'가
-    그냥 붙어서 나온다. '리뷰 숫자' 앞부분을 그대로 카테고리로 쓴다.
+    1) '...\\n브랜드명\\n카테고리\\n별점\\n4.22리뷰 3,080...' - 이 경우 '별점'이라는
+       글자가 따로 있고, 그 바로 앞 줄이 카테고리다.
+    2) '브랜드명\\n카테고리리뷰 3,622...' - '별점' 글자 없이 카테고리와 '리뷰'가
+       바로 붙어서 나온다 (화면에는 점(·)으로 구분돼 보이지만 실제 글자에는 없다).
     """
+    idx = body_text.find("별점")
+    if idx != -1:
+        lines = [l.strip() for l in body_text[:idx].split("\n") if l.strip()]
+        if lines:
+            return lines[-1]
+
     for line in body_text.split("\n"):
         if "리뷰" not in line:
             continue
