@@ -92,12 +92,18 @@ class App:
         )
         title.grid(row=0, column=0, columnspan=2, pady=(0, 24))
 
-        self.district_entry = self._add_field(card, 1, "희망지역", config.DISTRICT)
-        self.groups_entry = self._add_field(card, 2, "키워드", ", ".join(config.PRODUCT_GROUPS))
-        self.review_entry = self._add_field(card, 3, "기준 리뷰수", str(config.MIN_REVIEW_COUNT))
+        self.district_entry = self._add_field(card, 1, "희망지역(ex. 서울, 부산, 강남구 등)")
+        self.groups_entry = self._add_field(card, 2, "키워드(ex. 한식 맛집, 새로오픈한맛집 등)")
+        self.review_entry = self._add_field(card, 3, "기준리뷰수")
+
+        review_note = tk.Label(
+            card, text="*기준 리뷰수 이상 리뷰가 달린 브랜드만 수집합니다.",
+            bg=CARD_BG, fg=LABEL_COLOR, font=("맑은 고딕", 9),
+        )
+        review_note.grid(row=4, column=1, sticky="w", pady=(0, 4))
 
         button_row = tk.Frame(card, bg=CARD_BG)
-        button_row.grid(row=4, column=1, sticky="e", pady=(20, 0))
+        button_row.grid(row=5, column=1, sticky="e", pady=(16, 0))
 
         self.stop_button = tk.Button(
             button_row, text="중지", command=self.stop,
@@ -134,10 +140,10 @@ class App:
         self.log_queue = queue.Queue()
         self.root.after(200, self._poll_queue)
 
-    def _add_field(self, parent, row, label_text, default_value):
+    def _add_field(self, parent, row, label_text):
         label = tk.Label(
             parent, text=label_text, bg=CARD_BG, fg=LABEL_COLOR,
-            font=("맑은 고딕", 10, "bold"), anchor="w", width=10,
+            font=("맑은 고딕", 10, "bold"), anchor="w", justify="left",
         )
         label.grid(row=row, column=0, sticky="w", pady=8)
 
@@ -146,7 +152,6 @@ class App:
             highlightbackground=INPUT_BORDER, highlightcolor=ACCENT_COLOR,
             highlightthickness=1, relief="flat", bd=6,
         )
-        entry.insert(0, default_value)
         entry.grid(row=row, column=1, pady=8, sticky="ew")
         return entry
 
