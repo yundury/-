@@ -675,10 +675,11 @@ def save_excel(rows, output_file):
     link_col = HEADERS.index("네이버지도주소") + 1
     center_cols = {HEADERS.index(h) + 1 for h in ("브랜드명", "키워드", "카테고리", "리뷰수")}
 
-    # 1행(헤더): 회색 배경 + 지정 폰트 + 굵게
+    # 1행(헤더): 회색 배경 + 지정 폰트 + 굵게 + 가운데 정렬
     for cell in ws[1]:
         cell.font = Font(name=FONT_NAME, bold=True)
         cell.fill = HEADER_FILL
+        cell.alignment = Alignment(horizontal="center", vertical="center")
 
     # 본문: 폰트 적용, 설명 칸은 줄바꿈 허용, 지도 링크 칸은 클릭 가능한 하이퍼링크로,
     # 브랜드명/키워드/카테고리/리뷰수 칸은 셀 안에서 가운데 정렬
