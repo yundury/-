@@ -50,13 +50,14 @@ def _run_scraper_in_thread(district, groups_text, min_reviews, log_queue, stop_e
 
     old_stdout = sys.stdout
     sys.stdout = _QueueWriter(log_queue)
+    output_path = None
     try:
-        scraper.main(stop_event=stop_event)
+        output_path = scraper.main(stop_event=stop_event)
     except Exception as e:
         log_queue.put(f"\n오류가 발생했습니다: {e}\n")
     finally:
         sys.stdout = old_stdout
-        log_queue.put("__DONE__")
+        log_queue.put(("__DONE__", output_path))
 
 
 # 디자이너가 만든 HTML/CSS 시안(모던 플랫 스타일)에 맞춘 색상표
@@ -175,27 +176,27 @@ class App:
     def _poll_queue(self):
         try:
             while True:
-                text = self.log_queue.get_nowait()
-                if text == "__DONE__":
+                item = self.log_queue.get_nowait()
+                if isinstance(item, tuple) and item[:1] == ("__DONE__",):
+                    output_path = item[1]
                     self.run_button.configure(state="normal", text="실행", bg=ACCENT_COLOR)
                     self.stop_button.configure(state="disabled", bg=STOP_COLOR)
                     self.stop_event = None
                     self._append_log("\n===== 완료! 결과 엑셀 파일을 확인하세요 =====\n")
-                    self._notify_done()
+                    self._notify_done(output_path)
                 else:
-                    self._append_log(text)
+                    self._append_log(item)
         except queue.Empty:
             pass
         self.root.after(200, self._poll_queue)
 
-    def _notify_done(self):
-        output_path = os.path.abspath(config.OUTPUT_FILE)
-
-        if not os.path.exists(output_path):
+    def _notify_done(self, output_path):
+        if not output_path or not os.path.exists(output_path):
             messagebox.showinfo("완료", "검색이 끝났습니다.\n(저장된 결과 파일을 찾지 못했어요 - 조건에 맞는 가게가 없었을 수 있어요.)")
             return
 
-        if messagebox.askyesno("완료", f"검색이 끝났습니다!\n\n'{config.OUTPUT_FILE}' 파일을 지금 확인하시겠어요?"):
+        filename = os.path.basename(output_path)
+        if messagebox.askyesno("완료", f"검색이 끝났습니다!\n\n'{filename}' 파일을 지금 확인하시겠어요?"):
             self._open_file(output_path)
 
     def _open_file(self, path):

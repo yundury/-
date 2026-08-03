@@ -19,6 +19,7 @@ import os
 import re
 import time
 import random
+from datetime import datetime
 from urllib.parse import quote
 
 from playwright.sync_api import sync_playwright
@@ -673,6 +674,32 @@ def _display_width(text):
     return width
 
 
+def _resolve_output_path(output_file):
+    """결과 파일을 저장할 실제 경로를 정한다.
+
+    - 프로그램이 있는 폴더 아래 'Excel' 폴더 안에 저장한다 (폴더가 없으면 만든다).
+    - 파일 이름 끝에 크롤링한 날짜(_yymmdd)를 붙인다.
+    - 같은 이름의 파일이 이미 있으면(같은 조건으로 같은 날 다시 돌린 경우 등)
+      '(1)', '(2)'처럼 번호를 붙여서 기존 파일을 덮어쓰지 않는다.
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    excel_dir = os.path.join(base_dir, "Excel")
+    os.makedirs(excel_dir, exist_ok=True)
+
+    name, ext = os.path.splitext(output_file)
+    if not ext:
+        ext = ".xlsx"
+    stamped_name = f"{name}_{datetime.now().strftime('%y%m%d')}{ext}"
+
+    candidate = os.path.join(excel_dir, stamped_name)
+    counter = 1
+    while os.path.exists(candidate):
+        candidate = os.path.join(excel_dir, f"{name}_{datetime.now().strftime('%y%m%d')} ({counter}){ext}")
+        counter += 1
+
+    return candidate
+
+
 def save_excel(rows, output_file):
     """결과를 엑셀로 저장하면서 열 너비/행 높이 자동 맞춤, 헤더 색상, 폰트를 적용한다."""
     wb = Workbook()
@@ -736,19 +763,24 @@ def main(stop_event=None):
 
     stop_event(threading.Event 등)로 중간에 멈추거나 터미널에서 Ctrl+C를 눌러도,
     그때까지 모은 가게는 그대로 엑셀로 저장된다.
+
+    반환값: 실제로 저장된 엑셀 파일의 전체 경로 (저장할 게 없었으면 None)
     """
     candidates = collect_candidates(stop_event=stop_event)
     if not candidates:
         print(f"리뷰 {config.MIN_REVIEW_COUNT}개 이상인 가게가 없습니다. config.py의 검색 조건을 확인하세요.")
-        return
+        return None
 
     final_rows = [
         {h: c.get(h, "") for h in HEADERS}
         for c in candidates
     ]
     final_rows.sort(key=lambda r: r["리뷰수"], reverse=True)
-    save_excel(final_rows, config.OUTPUT_FILE)
-    print(f"완료! {len(final_rows)}곳을 '{config.OUTPUT_FILE}' 파일로 저장했습니다.")
+
+    output_path = _resolve_output_path(config.OUTPUT_FILE)
+    save_excel(final_rows, output_path)
+    print(f"완료! {len(final_rows)}곳을 '{output_path}' 파일로 저장했습니다.")
+    return output_path
 
 
 if __name__ == "__main__":
