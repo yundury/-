@@ -774,6 +774,7 @@ def main(stop_event=None):
 
     반환값: 실제로 저장된 엑셀 파일의 전체 경로 (저장할 게 없었으면 None)
     """
+    print("[스크립트 버전: 2026-08-03 (브랜드명에 카테고리가 중복으로 붙는 문제 수정판)]")
     candidates = collect_candidates(stop_event=stop_event)
     if not candidates:
         print(f"리뷰 {config.MIN_REVIEW_COUNT}개 이상인 가게가 없습니다. config.py의 검색 조건을 확인하세요.")
