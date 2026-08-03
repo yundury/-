@@ -1,11 +1,11 @@
-const CACHE_NAME = "character-app-v1";
+const CACHE_NAME = "character-app-v2";
 const ASSETS = [
   "./",
   "./index.html",
   "./styles.css",
   "./app.js",
-  "./data/config.js",
-  "./data/characters.js",
+  "./config.js",
+  "./characters.js",
   "./manifest.json",
 ];
 

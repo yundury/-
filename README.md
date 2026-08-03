@@ -12,7 +12,8 @@ python3 -m http.server 8000
 
 ## 캐릭터 내용 수정하기
 
-`data/characters.js` 파일 하나만 수정하면 됩니다. 이름, 특징, 색상, 이모지, 설명 등을 자유롭게 바꿀 수 있습니다.
+`characters.js` 파일 하나만 수정하면 됩니다. 이름, 특징, 색상, 이모지, 설명 등을 자유롭게 바꿀 수 있습니다.
+`editor.html`을 열면 입력 폼으로 내용을 채우고 `characters.js` 파일을 바로 다운로드할 수 있습니다.
 
 ## GitHub Pages로 배포하기
 

@@ -22,7 +22,7 @@ html, body {
   -webkit-tap-highlight-color: transparent;
 }
 
-/* ---------- 로딩 화면 ---------- */
+/* ---------- 인트로 화면 ---------- */
 #loading-screen {
   position: fixed;
   inset: 0;
@@ -30,21 +30,27 @@ html, body {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 16px;
+  gap: 22px;
+  padding: 24px;
   background: radial-gradient(circle at 50% 30%, #26263a, #14141c 70%);
   z-index: 100;
-  animation: fadeOut 0.5s ease 1.6s forwards;
-}
-
-.loading-emoji {
-  font-size: 48px;
-  animation: pulse 1.4s ease-in-out infinite;
+  animation: fadeOut 0.5s ease 2.4s forwards;
 }
 
 .loading-title {
-  font-size: 20px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  text-align: center;
+  text-wrap: balance;
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.loading-image {
+  width: min(72vw, 320px);
+  border-radius: 18px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .loading-bar {
@@ -60,7 +66,7 @@ html, body {
   width: 0%;
   background: var(--accent);
   border-radius: 2px;
-  animation: loadBar 1.5s ease forwards;
+  animation: loadBar 2.3s ease forwards;
 }
 
 @keyframes loadBar {
@@ -70,8 +76,8 @@ html, body {
 }
 
 @keyframes pulse {
-  0%, 100% { transform: scale(1); opacity: 1; }
-  50% { transform: scale(1.15); opacity: 0.7; }
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.75; }
 }
 
 @keyframes fadeOut {

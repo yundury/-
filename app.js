@@ -91,12 +91,12 @@
 
   renderHeroCircle();
 
-  // 로딩 화면을 잠깐 보여준 뒤 메인 화면 표시
+  // 인트로 화면을 보여준 뒤 메인 화면 표시
   window.addEventListener("load", () => {
     setTimeout(() => {
       app.hidden = false;
       setTimeout(() => loadingScreen.remove(), 550);
-    }, 1200);
+    }, 2400);
   });
 
   // 서비스 워커 등록 (PWA 오프라인 지원)
