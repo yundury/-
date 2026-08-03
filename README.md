@@ -81,8 +81,14 @@ pip install -r requirements.txt
 설치하는 명령어입니다. 시간이 조금 걸릴 수 있어요):
 
 ```
-playwright install chromium
+python -m playwright install chromium
 ```
+
+(`playwright install chromium`처럼 `python -m` 없이 입력하면 Windows에서
+"'playwright' 용어가 cmdlet, 함수... 인식되지 않습니다" 오류가 날 수 있습니다.
+`pip install`은 잘 됐어도 `playwright`라는 명령어 자체가 PATH에 안 잡혀 있는
+경우가 많아서 그렇습니다. 위처럼 앞에 `python -m`을 붙이면 이 문제 없이 항상
+됩니다.)
 
 ---
 
