@@ -2,13 +2,13 @@
 // 여기 내용만 바꾸면 앱에 바로 반영됩니다.
 // image: 캐릭터 프로필 사진 경로. 아직 없으면 null로 두면
 // 색상 배경 + 이모지로 자동 대체됩니다. 사진이 생기면
-// 예) "assets/characters/luna.jpg" 형태로 넣고 이 파일에 채워주세요.
+// 예) "assets/characters/luna.webp" 형태로 넣고 이 파일에 채워주세요.
 const CHARACTERS = [
   {
     id: 1,
     name: "루나",
     tagline: "달빛 아래의 몽상가",
-    image: "assets/characters/1.jpg",
+    image: "assets/characters/1.webp",
     color: "#7C6CF3",
     emoji: "🌙",
     age: "17세",
@@ -25,7 +25,7 @@ const CHARACTERS = [
     id: 2,
     name: "카이",
     tagline: "폭풍처럼 뜨거운 열정가",
-    image: "assets/characters/2.jpg",
+    image: "assets/characters/2.webp",
     color: "#F35E5E",
     emoji: "🔥",
     age: "19세",
@@ -42,7 +42,7 @@ const CHARACTERS = [
     id: 3,
     name: "세리",
     tagline: "얼음처럼 차분한 전략가",
-    image: "assets/characters/3.jpg",
+    image: "assets/characters/3.webp",
     color: "#4FB6E8",
     emoji: "❄️",
     age: "20세",
@@ -59,7 +59,7 @@ const CHARACTERS = [
     id: 4,
     name: "보리",
     tagline: "언제나 웃는 분위기 메이커",
-    image: "assets/characters/4.jpg",
+    image: "assets/characters/4.webp",
     color: "#F2B84B",
     emoji: "🌻",
     age: "16세",
@@ -76,7 +76,7 @@ const CHARACTERS = [
     id: 5,
     name: "노아",
     tagline: "묵묵히 곁을 지키는 수호자",
-    image: "assets/characters/5.jpg",
+    image: "assets/characters/5.webp",
     color: "#5FBF8F",
     emoji: "🛡️",
     age: "21세",
