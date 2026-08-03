@@ -21,6 +21,12 @@
   // 이미지 로드 실패(아직 업로드 전 등) 시 자리표시로 자연스럽게 대체
   const ON_IMG_ERROR = `this.style.display='none'; this.nextElementSibling.hidden=false;`;
 
+  function avatarInnerHtml(c) {
+    return c.image
+      ? `<img src="${c.image}" alt="${c.name}" onerror="${ON_IMG_ERROR}" /><span hidden>${c.emoji}</span>`
+      : `<span>${c.emoji}</span>`;
+  }
+
   function renderHeroCircle() {
     const centerHtml = APP_CONFIG.centerImage
       ? `<img src="${APP_CONFIG.centerImage}" alt="${APP_CONFIG.title}" onerror="${ON_IMG_ERROR}" />
@@ -29,14 +35,11 @@
 
     const avatarsHtml = CHARACTERS.map((c, i) => {
       const { left, top } = avatarPosition(i, CHARACTERS.length);
-      const inner = c.image
-        ? `<img src="${c.image}" alt="${c.name}" onerror="${ON_IMG_ERROR}" /><span hidden>${c.emoji}</span>`
-        : `<span>${c.emoji}</span>`;
       return `
         <button class="hero-avatar" data-id="${c.id}"
           style="left:${left}%; top:${top}%; background:${c.color}33; color:${c.color}"
           aria-label="${c.name}">
-          ${inner}
+          ${avatarInnerHtml(c)}
         </button>`;
     }).join("");
 
@@ -52,7 +55,7 @@
 
     modalBody.innerHTML = `
       <div class="modal-avatar" style="background:${c.color}33; color:${c.color}">
-        <span>${c.emoji}</span>
+        ${avatarInnerHtml(c)}
       </div>
       <h2 class="modal-name">${c.name}</h2>
       <p class="modal-tagline">${c.tagline}</p>
