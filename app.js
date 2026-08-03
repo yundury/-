@@ -1,5 +1,5 @@
 (function () {
-  const grid = document.getElementById("character-grid");
+  const heroCircle = document.getElementById("hero-circle");
   const loadingScreen = document.getElementById("loading-screen");
   const app = document.getElementById("app");
   const modal = document.getElementById("detail-modal");
@@ -7,17 +7,43 @@
   const modalClose = document.getElementById("modal-close");
   const modalBackdrop = modal.querySelector(".modal-backdrop");
 
-  function renderGrid() {
-    grid.innerHTML = CHARACTERS.map(
-      (c) => `
-      <button class="character-card" data-id="${c.id}">
-        <div class="character-avatar" style="background:${c.color}33; color:${c.color}">
-          <span>${c.emoji}</span>
-        </div>
-        <div class="character-name">${c.name}</div>
-        <div class="character-tagline">${c.tagline}</div>
-      </button>`
-    ).join("");
+  // 캐릭터 5명을 정오각형 모양으로 중앙 이미지 둘레에 배치
+  const RADIUS_PERCENT = 38;
+
+  function avatarPosition(index, total) {
+    const angleDeg = -90 + index * (360 / total);
+    const angleRad = (angleDeg * Math.PI) / 180;
+    const left = 50 + RADIUS_PERCENT * Math.cos(angleRad);
+    const top = 50 + RADIUS_PERCENT * Math.sin(angleRad);
+    return { left, top };
+  }
+
+  // 이미지 로드 실패(아직 업로드 전 등) 시 자리표시로 자연스럽게 대체
+  const ON_IMG_ERROR = `this.style.display='none'; this.nextElementSibling.hidden=false;`;
+
+  function renderHeroCircle() {
+    const centerHtml = APP_CONFIG.centerImage
+      ? `<img src="${APP_CONFIG.centerImage}" alt="${APP_CONFIG.title}" onerror="${ON_IMG_ERROR}" />
+         <div class="hero-center-placeholder" hidden>${APP_CONFIG.title}<br />(중앙 이미지 준비 중)</div>`
+      : `<div class="hero-center-placeholder">${APP_CONFIG.title}<br />(중앙 이미지 준비 중)</div>`;
+
+    const avatarsHtml = CHARACTERS.map((c, i) => {
+      const { left, top } = avatarPosition(i, CHARACTERS.length);
+      const inner = c.image
+        ? `<img src="${c.image}" alt="${c.name}" onerror="${ON_IMG_ERROR}" /><span hidden>${c.emoji}</span>`
+        : `<span>${c.emoji}</span>`;
+      return `
+        <button class="hero-avatar" data-id="${c.id}"
+          style="left:${left}%; top:${top}%; background:${c.color}33; color:${c.color}"
+          aria-label="${c.name}">
+          ${inner}
+        </button>`;
+    }).join("");
+
+    heroCircle.innerHTML = `
+      <div class="hero-center">${centerHtml}</div>
+      ${avatarsHtml}
+    `;
   }
 
   function openDetail(id) {
@@ -51,16 +77,16 @@
     document.body.style.overflow = "";
   }
 
-  grid.addEventListener("click", (e) => {
-    const card = e.target.closest(".character-card");
-    if (!card) return;
-    openDetail(Number(card.dataset.id));
+  heroCircle.addEventListener("click", (e) => {
+    const avatar = e.target.closest(".hero-avatar");
+    if (!avatar) return;
+    openDetail(Number(avatar.dataset.id));
   });
 
   modalClose.addEventListener("click", closeDetail);
   modalBackdrop.addEventListener("click", closeDetail);
 
-  renderGrid();
+  renderHeroCircle();
 
   // 로딩 화면을 잠깐 보여준 뒤 메인 화면 표시
   window.addEventListener("load", () => {
