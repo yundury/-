@@ -348,6 +348,14 @@ def _current_list_rows(page, search_frame, min_reviews, visited, stop_event=_NO_
             category = _read_entry_category(page, entry_frame)
             map_url = page.url
 
+            # 목록 카드에서는 이름과 카테고리가 구분자 없이 붙어 나오는 경우가 있다
+            # (예: '구봉만두' + '만두' -> '구봉만두만두'). 정확한 카테고리를 알고 나면,
+            # 이름이 그 카테고리로 끝나는 경우 그 부분을 잘라낸다.
+            if category and parsed["브랜드명"].endswith(category):
+                trimmed = parsed["브랜드명"][: -len(category)].strip()
+                if trimmed:
+                    parsed["브랜드명"] = trimmed
+
             if _category_debug_shown[0] < 3:
                 try:
                     raw = entry_frame.locator("body").inner_text(timeout=1500)
