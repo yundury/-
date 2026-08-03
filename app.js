@@ -102,7 +102,13 @@
       fromEl.classList.add("fade-out");
       setTimeout(() => {
         fromEl.remove();
+        toEl.style.opacity = "0";
+        toEl.style.transition = `opacity ${FADE_MS}ms ease`;
         toEl.hidden = false;
+        void toEl.offsetWidth; // 전환이 걸리도록 강제 리플로우
+        requestAnimationFrame(() => {
+          toEl.style.opacity = "1";
+        });
       }, FADE_MS);
     }, holdMs);
   }
