@@ -33,20 +33,23 @@ class _QueueWriter:
         pass
 
 
-def _run_scraper_in_thread(district, groups_text, min_reviews, log_queue, stop_event):
+def _run_scraper_in_thread(district, groups_text, brand, min_reviews, log_queue, stop_event):
     """실제 크롤링을 별도 스레드에서 실행한다 (창이 멈추지 않도록).
 
     config.py의 값들을 입력받은 값으로 덮어쓴 뒤, 기존 크롤링 코드(main())를
     그대로 호출한다. stop_event는 "중지" 버튼을 눌렀을 때 크롤링 쪽에 신호를
     보내서, 지금까지 모은 것만이라도 저장하고 멈추게 한다.
+
+    희망지역/키워드/브랜드/기준리뷰수는 전부 비워둬도 되는 선택 입력이다.
     """
     config.DISTRICT = district
     config.PRODUCT_GROUPS = [g.strip() for g in groups_text.replace(",", "\n").split("\n") if g.strip()]
+    config.BRAND = brand
     config.MIN_REVIEW_COUNT = min_reviews
 
-    safe_district = district.replace("/", "_")
-    safe_groups = "_".join(config.PRODUCT_GROUPS).replace("/", "_")
-    config.OUTPUT_FILE = f"{safe_district}_{safe_groups}_리뷰{min_reviews}개이상.xlsx"
+    name_parts = [p.replace("/", "_") for p in (district, "_".join(config.PRODUCT_GROUPS), brand) if p]
+    base_name = "_".join(name_parts) if name_parts else "검색결과"
+    config.OUTPUT_FILE = f"{base_name}_리뷰{min_reviews}개이상.xlsx"
 
     old_stdout = sys.stdout
     sys.stdout = _QueueWriter(log_queue)
@@ -95,10 +98,11 @@ class App:
 
         self.district_entry = self._add_field(card, 1, "희망지역", "ex. 서울, 부산, 강남구 등")
         self.groups_entry = self._add_field(card, 3, "키워드", "ex. 한식 맛집, 새로오픈한맛집 등")
-        self.review_entry = self._add_field(card, 5, "기준리뷰수", "*기준 리뷰수 이상 리뷰가 달린 브랜드만 수집합니다.")
+        self.brand_entry = self._add_field(card, 5, "브랜드", "ex. 스타벅스, 교촌치킨 등 (특정 브랜드만 찾을 때)")
+        self.review_entry = self._add_field(card, 7, "기준리뷰수", "*기준 리뷰수 이상 리뷰가 달린 브랜드만 수집합니다. (비워두면 전부 수집)")
 
         button_row = tk.Frame(card, bg=CARD_BG)
-        button_row.grid(row=7, column=1, sticky="e", pady=(16, 0))
+        button_row.grid(row=9, column=1, sticky="e", pady=(16, 0))
 
         self.stop_button = tk.Button(
             button_row, text="중지", command=self.stop,
@@ -213,26 +217,31 @@ class App:
     def start(self):
         district = self.district_entry.get().strip()
         groups_text = self.groups_entry.get().strip()
+        brand = self.brand_entry.get().strip()
         review_text = self.review_entry.get().strip()
 
-        if not district or not groups_text:
-            messagebox.showwarning("입력 필요", "지역과 키워드를 입력해주세요.")
+        if not district and not groups_text and not brand:
+            messagebox.showwarning("입력 필요", "희망지역 / 키워드 / 브랜드 중 하나는 입력해주세요.")
             return
 
-        try:
-            min_reviews = int(review_text.replace(",", ""))
-        except ValueError:
-            messagebox.showwarning("입력 오류", "희망 리뷰 수는 숫자로 입력해주세요.")
-            return
+        if review_text:
+            try:
+                min_reviews = int(review_text.replace(",", ""))
+            except ValueError:
+                messagebox.showwarning("입력 오류", "기준 리뷰 수는 숫자로 입력해주세요.")
+                return
+        else:
+            min_reviews = 0
 
         self.run_button.configure(state="disabled", text="실행 중...", bg="#93c5fd")
         self.stop_button.configure(state="normal", bg=STOP_COLOR)
-        self._append_log(f"\n===== '{district} / {groups_text}' (리뷰 {min_reviews}개 이상) 검색 시작 =====\n")
+        summary = " / ".join(p for p in (district, groups_text, brand) if p)
+        self._append_log(f"\n===== '{summary}' (리뷰 {min_reviews}개 이상) 검색 시작 =====\n")
 
         self.stop_event = threading.Event()
         thread = threading.Thread(
             target=_run_scraper_in_thread,
-            args=(district, groups_text, min_reviews, self.log_queue, self.stop_event),
+            args=(district, groups_text, brand, min_reviews, self.log_queue, self.stop_event),
             daemon=True,
         )
         thread.start()

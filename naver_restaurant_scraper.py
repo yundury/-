@@ -59,6 +59,12 @@ _NO_STOP = _NullStopEvent()
 # 카테고리 추출용 디버그를 몇 번 보여줬는지 (임시 디버그용, 실행할 때마다 초기화되지는 않음)
 _category_debug_shown = [0]
 
+# 목록 카드에 '리뷰' 글자 자체가 없어서 건너뛴 항목의 디버그를 몇 번 보여줬는지.
+# (브랜드명으로 검색하면 목록 카드에 리뷰 수가 안 보이는 경우가 있을 수 있어서,
+# 이런 경우를 진단하기 위한 디버그. 실제로 이런 사례를 만나면 이 출력을 보고
+# 카드 글자 형태에 맞춰 다시 고쳐야 한다.)
+_no_review_debug_shown = [0]
+
 
 def _district_only(address):
     """'서울 강남구 도산대로1길 10' -> '서울 강남구'처럼 구까지만 남긴다."""
@@ -316,6 +322,9 @@ def _current_list_rows(page, search_frame, min_reviews, visited, stop_event=_NO_
         except Exception:
             continue
         if "리뷰" not in text:
+            if _no_review_debug_shown[0] < 3:
+                print(f"  ---- (리뷰 글자 없어서 건너뜀 디버그) 카드 글자: {text!r}")
+                _no_review_debug_shown[0] += 1
             continue
         parsed = _parse_list_item(text)
         if not parsed:
@@ -497,16 +506,32 @@ def collect_candidates(stop_event=None):
     candidates = {}
     debug_shown = False
 
+    # 희망지역/키워드/브랜드는 전부 선택 입력이다. 브랜드가 적혀 있으면 키워드 목록에
+    # 합쳐서 똑같이 "지역 + 검색어"로 검색한다 (예: BRAND="스타벅스" -> "강남구 스타벅스").
+    district = getattr(config, "DISTRICT", "").strip()
+    brand = getattr(config, "BRAND", "").strip()
+    search_terms = [g.strip() for g in config.PRODUCT_GROUPS if g.strip()]
+    if brand:
+        search_terms.append(brand)
+    if not search_terms:
+        # 검색어가 하나도 없으면(지역만 입력한 경우) 지역만으로 검색한다.
+        search_terms = [""]
+    min_reviews = config.MIN_REVIEW_COUNT or 0
+
+    if not district and not any(search_terms):
+        print("희망지역/키워드/브랜드가 모두 비어 있어서 검색할 수 없습니다.")
+        return []
+
     with sync_playwright() as p:
         context, page = _open_browser(p)
 
         try:
-            for group in config.PRODUCT_GROUPS:
+            for group in search_terms:
                 if stop_event.is_set():
                     print("중지 요청을 받아 검색을 멈춥니다. 지금까지 모은 것만 저장합니다.")
                     break
 
-                query = f"{config.DISTRICT} {group}"
+                query = " ".join(part for part in (district, group) if part)
                 print(f"'{query}' 검색 중...")
                 page.goto(f"https://map.naver.com/p/search/{quote(query)}", timeout=30000)
 
@@ -520,7 +545,7 @@ def collect_candidates(stop_event=None):
                         review_count = _parse_review_count(body_text)
                         name, _ = _extract_name_and_category(body_text)
                         category = _category_from_status_line(body_text)
-                        if review_count is not None and review_count >= config.MIN_REVIEW_COUNT and name:
+                        if review_count is not None and review_count >= min_reviews and name:
                             candidates.setdefault(name, {
                                 "브랜드명": name,
                                 "키워드": group,
@@ -535,7 +560,7 @@ def collect_candidates(stop_event=None):
                     rows = _collect_list_items_across_pages(
                         page,
                         max_pages=config.MAX_LIST_PAGES,
-                        min_reviews=config.MIN_REVIEW_COUNT,
+                        min_reviews=min_reviews,
                         stop_event=stop_event,
                     )
 
@@ -548,7 +573,7 @@ def collect_candidates(stop_event=None):
 
                     found_in_query = 0
                     for row in rows:
-                        if row["리뷰수"] < config.MIN_REVIEW_COUNT:
+                        if row["리뷰수"] < min_reviews:
                             continue
                         name = row["브랜드명"]
                         if name not in candidates:
@@ -561,7 +586,7 @@ def collect_candidates(stop_event=None):
                                 "대표 리뷰": row["대표 리뷰"],
                             }
                             found_in_query += 1
-                    print(f"  -> 목록 {len(rows)}개 중 리뷰 {config.MIN_REVIEW_COUNT}개 이상 신규 {found_in_query}곳")
+                    print(f"  -> 목록 {len(rows)}개 중 리뷰 {min_reviews}개 이상 신규 {found_in_query}곳")
                 else:
                     print("  -> 목록도 상세 페이지도 뜨지 않았습니다 (타임아웃). 건너뜁니다.")
 

@@ -1,2 +1,5 @@
 __pycache__/
 *.pyc
+.setup_done
+browser_profile/
+Excel/
