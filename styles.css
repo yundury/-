@@ -42,6 +42,10 @@ html, body {
   opacity: 0;
 }
 
+.intro-screen[hidden] {
+  display: none;
+}
+
 .intro-title-text {
   font-size: 22px;
   font-weight: 700;
