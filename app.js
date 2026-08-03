@@ -1,6 +1,7 @@
 (function () {
   const heroCircle = document.getElementById("hero-circle");
-  const loadingScreen = document.getElementById("loading-screen");
+  const introTitle = document.getElementById("intro-title");
+  const introPhoto = document.getElementById("intro-photo");
   const app = document.getElementById("app");
   const modal = document.getElementById("detail-modal");
   const modalBody = document.getElementById("modal-body");
@@ -91,12 +92,26 @@
 
   renderHeroCircle();
 
-  // 인트로 화면을 보여준 뒤 메인 화면 표시
-  window.addEventListener("load", () => {
+  // 인트로: 제목 화면 → 사진 화면 → 캐릭터 화면 순서로 전환
+  const FADE_MS = 500;
+  const TITLE_HOLD_MS = 1400;
+  const PHOTO_HOLD_MS = 1600;
+
+  function switchScreen(fromEl, toEl, holdMs) {
     setTimeout(() => {
-      app.hidden = false;
-      setTimeout(() => loadingScreen.remove(), 550);
-    }, 2400);
+      fromEl.classList.add("fade-out");
+      setTimeout(() => {
+        fromEl.remove();
+        toEl.hidden = false;
+      }, FADE_MS);
+    }, holdMs);
+  }
+
+  window.addEventListener("load", () => {
+    switchScreen(introTitle, introPhoto, TITLE_HOLD_MS);
+    setTimeout(() => {
+      switchScreen(introPhoto, app, PHOTO_HOLD_MS);
+    }, TITLE_HOLD_MS + FADE_MS);
   });
 
   // 서비스 워커 등록 (PWA 오프라인 지원)

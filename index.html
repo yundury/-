@@ -19,12 +19,17 @@
 </head>
 <body>
 
-<!-- 인트로 화면 -->
-<div id="loading-screen">
-  <div class="loading-title">🦅독수리오형제 Project🦅</div>
-  <img class="loading-image" src="intro.png" alt="독수리오형제 Project"
-    onerror="this.style.display='none'" />
+<!-- 인트로 1단계: 제목 -->
+<div id="intro-title" class="intro-screen">
+  <div class="intro-title-text">🦅독수리오형제 Project🦅</div>
   <div class="loading-bar"><div class="loading-bar-fill"></div></div>
+</div>
+
+<!-- 인트로 2단계: 사진 -->
+<div id="intro-photo" class="intro-screen" hidden>
+  <img class="intro-photo-image" src="intro.png" alt="독수리오형제 Project"
+    onerror="this.style.display='none'; this.nextElementSibling.hidden=false;" />
+  <div class="intro-photo-placeholder" hidden>사진 준비 중</div>
 </div>
 
 <!-- 메인 화면 -->

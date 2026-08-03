@@ -22,8 +22,8 @@ html, body {
   -webkit-tap-highlight-color: transparent;
 }
 
-/* ---------- 인트로 화면 ---------- */
-#loading-screen {
+/* ---------- 인트로 화면 (제목 → 사진 → 캐릭터 3단계) ---------- */
+.intro-screen {
   position: fixed;
   inset: 0;
   display: flex;
@@ -34,10 +34,15 @@ html, body {
   padding: 24px;
   background: radial-gradient(circle at 50% 30%, #26263a, #14141c 70%);
   z-index: 100;
-  animation: fadeOut 0.5s ease 2.4s forwards;
+  opacity: 1;
+  transition: opacity 0.5s ease;
 }
 
-.loading-title {
+.intro-screen.fade-out {
+  opacity: 0;
+}
+
+.intro-title-text {
   font-size: 22px;
   font-weight: 700;
   letter-spacing: 0.01em;
@@ -46,11 +51,16 @@ html, body {
   animation: pulse 1.6s ease-in-out infinite;
 }
 
-.loading-image {
-  width: min(72vw, 320px);
+.intro-photo-image {
+  width: min(80vw, 360px);
   border-radius: 18px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
   border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.intro-photo-placeholder {
+  color: var(--text-muted);
+  font-size: 14px;
 }
 
 .loading-bar {
@@ -66,7 +76,7 @@ html, body {
   width: 0%;
   background: var(--accent);
   border-radius: 2px;
-  animation: loadBar 2.3s ease forwards;
+  animation: loadBar 1.3s ease forwards;
 }
 
 @keyframes loadBar {
@@ -78,13 +88,6 @@ html, body {
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.75; }
-}
-
-@keyframes fadeOut {
-  to {
-    opacity: 0;
-    visibility: hidden;
-  }
 }
 
 /* ---------- 메인 화면 ---------- */
