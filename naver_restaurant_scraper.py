@@ -278,36 +278,50 @@ def _category_from_status_line(body_text):
     return ""
 
 
-def _read_entry_category(page, entry_frame, max_attempts=6):
+def _read_entry_details(page, entry_frame, need_review_count, max_attempts=6):
     """목록에서 항목을 클릭해 옆에 뜬 상세 패널이 로딩되길 기다리면서,
     상태줄에서 카테고리(예: '두부요리')를 읽어온다.
+
+    need_review_count가 True면(목록 카드 자체에 리뷰 수가 안 보였던 경우, 예:
+    브랜드명만 검색했을 때) 상세 패널 글자에서 리뷰 수도 함께 읽어온다. 카테고리와
+    똑같은 글자에 리뷰 수도 들어있어서 ('...별점\\n4.22리뷰 3,080...' 같은 형태),
+    한 번 읽은 글자에서 같이 뽑아내면 되고 따로 더 기다릴 필요는 없다.
     """
+    category, review_count = "", None
     for _ in range(max_attempts):
         try:
             body_text = entry_frame.locator("body").inner_text(timeout=1500)
         except Exception:
             body_text = ""
 
-        category = _category_from_status_line(body_text)
-        if category:
-            return category
+        if not category:
+            category = _category_from_status_line(body_text)
+        if need_review_count and review_count is None:
+            review_count = _parse_review_count(body_text)
+
+        if category and (not need_review_count or review_count is not None):
+            return category, review_count
 
         page.wait_for_timeout(400)
 
-    return ""
+    return category, review_count
 
 
 def _current_list_rows(page, search_frame, min_reviews, visited, stop_event=_NO_STOP):
-    """지금 화면에 있는 목록 항목들 중 '리뷰'가 포함된 것만 정보를 뽑아서 가져온다.
+    """지금 화면에 있는 목록 항목들의 정보를 뽑아서 가져온다.
 
     (화면 밖으로 스크롤되면 항목이 DOM에서 사라지는 경우가 있어서, 스크롤하며
     보일 때마다 그때그때 뽑아둬야 한다. 나중에 한꺼번에 훑으면 이미 사라진
     항목의 정보를 놓칠 수 있다.)
 
+    보통은(지역+키워드로 검색했을 때) 목록 카드 글자에 리뷰 수가 바로 보이므로,
     기준 리뷰 수를 넘는 항목만 클릭해서 옆에 뜨는 상세 패널로 정확한 카테고리와
-    실제 지도 링크(page.url)를 가져온다. 목록 페이지를 새로 열지 않고, 지금 열려
-    있는 목록에서 바로 클릭하는 거라 상세 페이지를 매번 새로 여는 것보다 훨씬
-    빠르다. (기준 미달 항목은 클릭하지 않고 건너뛴다.)
+    실제 지도 링크(page.url)를 가져온다 (기준 미달 항목은 클릭하지 않고 건너뛴다 -
+    그래서 빠르다).
+
+    다만 브랜드명만 검색했을 때는 네이버 지도가 목록 카드에 리뷰 수를 아예 안
+    보여준다. 이 경우엔 리뷰 수를 미리 걸러낼 방법이 없으므로, 일단 클릭해서
+    상세 패널에서 리뷰 수를 직접 확인한 뒤에 기준을 넘는지 판단한다.
 
     stop_event가 신호를 받으면(중지 버튼 등), 클릭하며 하나씩 확인하는 걸
     멈추고 지금까지 모은 것만 돌려준다.
@@ -321,19 +335,35 @@ def _current_list_rows(page, search_frame, min_reviews, visited, stop_event=_NO_
             text = it.inner_text(timeout=2000)
         except Exception:
             continue
-        if "리뷰" not in text:
+
+        lines = [l.strip() for l in text.strip().split("\n") if l.strip()]
+        if not lines:
+            continue
+        name_guess = _strip_trailing_badges(lines[0])
+        if not name_guess or name_guess in visited:
+            continue
+
+        review_count = _parse_review_count(text)
+        if review_count is not None:
+            # 목록 카드에 리뷰 수가 바로 보이는 일반적인 경우: 기준 미달이면 클릭 없이 건너뛴다.
+            if review_count < min_reviews:
+                continue
+            parsed = _parse_list_item(text)
+            if not parsed:
+                continue
+        else:
+            # 목록 카드에 '리뷰' 글자 자체가 없는 경우 (예: 브랜드명만 검색) -
+            # 나중에 클릭해서 상세 패널로 리뷰 수를 직접 확인해야 한다.
             if _no_review_debug_shown[0] < 3:
-                print(f"  ---- (리뷰 글자 없어서 건너뜀 디버그) 카드 글자: {text!r}")
+                print(f"  ---- (목록에 리뷰 수가 안 보여서 클릭해서 확인함 디버그) 카드 글자: {text!r}")
                 _no_review_debug_shown[0] += 1
-            continue
-        parsed = _parse_list_item(text)
-        if not parsed:
-            continue
-        if parsed["브랜드명"] in visited:
-            continue
-        if parsed["리뷰수"] < min_reviews:
-            continue
-        visited.add(parsed["브랜드명"])
+            parsed = {
+                "브랜드명": name_guess,
+                "리뷰수": 0,
+                "대표 리뷰": _extract_review_snippet(lines),
+            }
+
+        visited.add(name_guess)
 
         category, map_url = "", ""
         try:
@@ -354,8 +384,13 @@ def _current_list_rows(page, search_frame, min_reviews, visited, stop_event=_NO_
                     page.wait_for_timeout(400)
             except Exception:
                 pass
-            category = _read_entry_category(page, entry_frame)
+
+            category, panel_review_count = _read_entry_details(
+                page, entry_frame, need_review_count=(review_count is None)
+            )
             map_url = page.url
+            if review_count is None and panel_review_count is not None:
+                parsed["리뷰수"] = panel_review_count
 
             # 목록 카드에서는 이름과 카테고리가 구분자 없이 붙어 나오는 경우가 있다
             # (예: '구봉만두' + '만두' -> '구봉만두만두'). 정확한 카테고리를 알고 나면,
@@ -375,6 +410,9 @@ def _current_list_rows(page, search_frame, min_reviews, visited, stop_event=_NO_
                 _category_debug_shown[0] += 1
         except Exception:
             pass
+
+        if parsed["리뷰수"] < min_reviews:
+            continue
 
         parsed["카테고리"] = category
         parsed["네이버지도주소"] = map_url
