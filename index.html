@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+<title>캐릭터 소개</title>
+<meta name="description" content="캐릭터 소개 웹앱" />
+
+<!-- iOS 홈 화면 앱처럼 보이게 -->
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="캐릭터 소개" />
+<meta name="theme-color" content="#14141c" />
+<link rel="apple-touch-icon" href="icons/icon-180.png" />
+<link rel="icon" href="icons/icon-192.png" />
+<link rel="manifest" href="manifest.json" />
+
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<!-- 로딩 화면 -->
+<div id="loading-screen">
+  <div class="loading-emoji">✨</div>
+  <div class="loading-title">캐릭터 소개</div>
+  <div class="loading-bar"><div class="loading-bar-fill"></div></div>
+</div>
+
+<!-- 메인 화면 -->
+<main id="app" hidden>
+  <header class="app-header">
+    <h1>캐릭터 소개</h1>
+    <p>캐릭터를 눌러 자세한 정보를 확인해보세요</p>
+  </header>
+
+  <section id="character-grid" class="character-grid"></section>
+</main>
+
+<!-- 상세 정보 모달 -->
+<div id="detail-modal" class="modal" hidden>
+  <div class="modal-backdrop"></div>
+  <div class="modal-sheet">
+    <button id="modal-close" class="modal-close" aria-label="닫기">✕</button>
+    <div id="modal-body" class="modal-body"></div>
+  </div>
+</div>
+
+<script src="data/characters.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
