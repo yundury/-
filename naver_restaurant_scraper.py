@@ -852,6 +852,14 @@ def main(stop_event=None):
     output_path = _resolve_output_path(config.OUTPUT_FILE)
     save_excel(final_rows, output_path)
     print(f"완료! {len(final_rows)}곳을 '{output_path}' 파일로 저장했습니다.")
+
+    if getattr(config, "NOTION_ENABLED", False):
+        try:
+            import notion_export
+            notion_export.push_rows_to_notion(final_rows, config.NOTION_TOKEN, config.NOTION_PARENT_PAGE_ID)
+        except Exception as e:
+            print(f"[노션] 업로드 중 문제가 발생했습니다 (엑셀 파일은 정상 저장되었습니다): {e}")
+
     return output_path
 
 
