@@ -108,20 +108,28 @@ _PAGE_HTML = """<!doctype html>
   }
   .wrap { max-width: 1080px; margin: 0 auto; }
   .card {
-    max-width: 640px;
-    margin: 0 auto;
     background: #ffffff;
     border: 1px solid #e2e2de;
     border-radius: 14px;
-    padding: 32px 36px;
+    padding: 36px 44px;
     box-shadow: 0 18px 40px -24px rgba(0,0,0,0.18);
   }
   .title {
-    font-size: 17px;
+    font-size: 20px;
     font-weight: 800;
-    margin-bottom: 22px;
+    margin-bottom: 8px;
   }
-  .field { margin-bottom: 16px; }
+  .subtitle {
+    font-size: 13px;
+    color: #8b8c86;
+    margin-bottom: 26px;
+  }
+  .fields-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 36px;
+    row-gap: 22px;
+  }
   .field label {
     display: block;
     font-size: 12.5px;
@@ -133,8 +141,8 @@ _PAGE_HTML = """<!doctype html>
     width: 100%;
     border: 1px solid #e2e2de;
     border-radius: 10px;
-    padding: 10px 12px;
-    font-size: 13.5px;
+    padding: 11px 14px;
+    font-size: 14px;
     color: #16181d;
     font-family: inherit;
   }
@@ -151,7 +159,7 @@ _PAGE_HTML = """<!doctype html>
     display: flex;
     justify-content: flex-end;
     gap: 8px;
-    margin: 20px 0 4px;
+    margin: 28px 0 4px;
   }
   button {
     border: none;
@@ -233,26 +241,29 @@ _PAGE_HTML = """<!doctype html>
 <div class="wrap">
   <div class="card">
     <div class="title">&#129413; 독수리오형제 Project</div>
+    <div class="subtitle">희망지역 · 키워드 · 브랜드를 조합해서 네이버 지도에서 리뷰 많은 곳을 찾아드려요.</div>
 
-    <div class="field">
-      <label>희망지역</label>
-      <input id="district" type="text">
-      <div class="note">ex. 서울, 부산, 강남구 등</div>
-    </div>
-    <div class="field">
-      <label>키워드</label>
-      <input id="keyword" type="text">
-      <div class="note">ex. 한식 맛집, 새로오픈한맛집 등</div>
-    </div>
-    <div class="field">
-      <label>브랜드</label>
-      <input id="brand" type="text">
-      <div class="note">ex. 스타벅스, 교촌치킨 등 (특정 브랜드만 찾을 때)</div>
-    </div>
-    <div class="field">
-      <label>기준리뷰수</label>
-      <input id="minReviews" type="text">
-      <div class="note">*기준 리뷰수 이상 리뷰가 달린 브랜드만 수집합니다. (비워두면 전부 수집)</div>
+    <div class="fields-grid">
+      <div class="field">
+        <label>희망지역</label>
+        <input id="district" type="text">
+        <div class="note">ex. 서울, 부산, 강남구 등</div>
+      </div>
+      <div class="field">
+        <label>키워드</label>
+        <input id="keyword" type="text">
+        <div class="note">ex. 한식 맛집, 새로오픈한맛집 등</div>
+      </div>
+      <div class="field">
+        <label>브랜드</label>
+        <input id="brand" type="text">
+        <div class="note">ex. 스타벅스, 교촌치킨 등 (특정 브랜드만 찾을 때)</div>
+      </div>
+      <div class="field">
+        <label>기준리뷰수</label>
+        <input id="minReviews" type="text">
+        <div class="note">*기준 리뷰수 이상 리뷰가 달린 브랜드만 수집합니다. (비워두면 전부 수집)</div>
+      </div>
     </div>
 
     <div class="actions">
