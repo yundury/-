@@ -34,10 +34,3 @@ MAX_LIST_PAGES = 10
 #      뜨는 브라우저 창에서 캡차를 직접 한 번 풀어주세요. 이후 실행부터는
 #      True로 다시 바꿔도 됩니다 (브라우저 방문 기록이 저장되어 있어서 괜찮습니다).
 HEADLESS = False
-
-# 7) (선택) 결과를 노션(Notion) 표에도 자동으로 올리고 싶으면 아래 값들을 채우세요.
-#    안 쓰면 그냥 이대로 두면 됩니다 - 엑셀 저장은 이 설정과 상관없이 항상 됩니다.
-#    설정 방법은 README.md의 "9. (선택) 노션에 결과 올리기"를 참고하세요.
-NOTION_ENABLED = False
-NOTION_TOKEN = ""
-NOTION_PARENT_PAGE_ID = ""

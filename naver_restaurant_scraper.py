@@ -835,13 +835,13 @@ def main(stop_event=None):
     stop_event(threading.Event 등)로 중간에 멈추거나 터미널에서 Ctrl+C를 눌러도,
     그때까지 모은 가게는 그대로 엑셀로 저장된다.
 
-    반환값: 실제로 저장된 엑셀 파일의 전체 경로 (저장할 게 없었으면 None)
+    반환값: (실제로 저장된 엑셀 파일의 전체 경로 또는 None, 결과 행 리스트)
     """
     print("[스크립트 버전: 2026-08-03 (브랜드명에 카테고리가 중복으로 붙는 문제 수정판)]")
     candidates = collect_candidates(stop_event=stop_event)
     if not candidates:
         print(f"리뷰 {config.MIN_REVIEW_COUNT}개 이상인 가게가 없습니다. config.py의 검색 조건을 확인하세요.")
-        return None
+        return None, []
 
     final_rows = [
         {h: c.get(h, "") for h in HEADERS}
@@ -853,18 +853,7 @@ def main(stop_event=None):
     save_excel(final_rows, output_path)
     print(f"완료! {len(final_rows)}곳을 '{output_path}' 파일로 저장했습니다.")
 
-    try:
-        import notion_export
-        notion_export.push_rows_to_notion(
-            final_rows,
-            getattr(config, "NOTION_ENABLED", False),
-            getattr(config, "NOTION_TOKEN", ""),
-            getattr(config, "NOTION_PARENT_PAGE_ID", ""),
-        )
-    except Exception as e:
-        print(f"[노션] 업로드 중 문제가 발생했습니다 (엑셀 파일은 정상 저장되었습니다): {e}")
-
-    return output_path
+    return output_path, final_rows
 
 
 if __name__ == "__main__":

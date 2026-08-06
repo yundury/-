@@ -1,274 +1,498 @@
 """
-config.py를 매번 열어서 고치지 않아도 되도록, 지역/키워드/희망 리뷰수를
-입력하는 작은 창(프로그램)입니다. "실행"을 누르면 naver_restaurant_scraper.py의
-크롤링 코드가 그대로 실행됩니다.
+config.py를 매번 열어서 고치지 않아도 되도록, 지역/키워드/브랜드/기준 리뷰수를
+입력하는 화면을 로컬 웹페이지로 띄워주는 실행기입니다. 뒤에서는
+naver_restaurant_scraper.py의 크롤링 코드가 파이썬으로 그대로 돌아가고,
+화면만 사용자님 컴퓨터의 기본 브라우저에 새 탭으로 예쁘게 뜹니다.
 
-실행 방법: python launcher.py
+실행 방법: python launcher.py (또는 start.bat 더블클릭)
 """
 
 import importlib
+import http.server
+import json
 import os
-import queue
+import socketserver
 import subprocess
 import sys
 import threading
-import tkinter as tk
-from tkinter import messagebox, scrolledtext
+import webbrowser
 
 import config
 import naver_restaurant_scraper as scraper
 
+PORT = 8899
 
-class _QueueWriter:
-    """print() 출력을 화면(텍스트 상자)으로 보내기 위한 도우미."""
+_state_lock = threading.Lock()
+_state = {
+    "running": False,
+    "log": "",
+    "done": False,
+    "rows": [],
+    "output_path": None,
+    "error": None,
+}
+_stop_event = None
 
-    def __init__(self, q):
-        self.q = q
+
+class _LogWriter:
+    """print() 출력을 웹페이지 로그창으로 보내기 위한 도우미."""
 
     def write(self, text):
         if text:
-            self.q.put(text)
+            with _state_lock:
+                _state["log"] += text
         return len(text)
 
     def flush(self):
         pass
 
 
-def _run_scraper_in_thread(district, groups_text, brand, min_reviews, log_queue, stop_event):
-    """실제 크롤링을 별도 스레드에서 실행한다 (창이 멈추지 않도록).
+def _build_output_name(district, groups, brand, min_reviews):
+    name_parts = [p.replace("/", "_") for p in (district, "_".join(groups), brand) if p]
+    base_name = "_".join(name_parts) if name_parts else "검색결과"
+    return f"{base_name}_리뷰{min_reviews}개이상.xlsx"
 
-    config.py의 값들을 입력받은 값으로 덮어쓴 뒤, 기존 크롤링 코드(main())를
-    그대로 호출한다. stop_event는 "중지" 버튼을 눌렀을 때 크롤링 쪽에 신호를
-    보내서, 지금까지 모은 것만이라도 저장하고 멈추게 한다.
 
-    희망지역/키워드/브랜드/기준리뷰수는 전부 비워둬도 되는 선택 입력이다.
+def _run_scraper(district, groups_text, brand, min_reviews):
+    global _stop_event
 
-    맨 처음에 config.py를 다시 읽어온다 - GUI 창을 계속 켜둔 채로 config.py의
-    NOTION_ENABLED 같은 값을 고친 경우에도, 새로 실행할 때는 방금 저장한 값을
-    반영해야 하기 때문이다 (안 그러면 프로그램이 켜져 있는 동안 맨 처음 읽은
-    값을 계속 쓰게 된다).
-    """
+    # config.py를 다시 읽어온다 - 이 서버는 여러 번 "실행"을 눌러도 계속 켜져
+    # 있으므로, 중간에 config.py를 고쳤다면 이번 실행부터는 반영해야 한다.
     importlib.reload(config)
     config.DISTRICT = district
     config.PRODUCT_GROUPS = [g.strip() for g in groups_text.replace(",", "\n").split("\n") if g.strip()]
     config.BRAND = brand
     config.MIN_REVIEW_COUNT = min_reviews
-
-    name_parts = [p.replace("/", "_") for p in (district, "_".join(config.PRODUCT_GROUPS), brand) if p]
-    base_name = "_".join(name_parts) if name_parts else "검색결과"
-    config.OUTPUT_FILE = f"{base_name}_리뷰{min_reviews}개이상.xlsx"
+    config.OUTPUT_FILE = _build_output_name(district, config.PRODUCT_GROUPS, brand, min_reviews)
 
     old_stdout = sys.stdout
-    sys.stdout = _QueueWriter(log_queue)
-    output_path = None
+    sys.stdout = _LogWriter()
     try:
-        output_path = scraper.main(stop_event=stop_event)
+        output_path, rows = scraper.main(stop_event=_stop_event)
+        with _state_lock:
+            _state["output_path"] = output_path
+            _state["rows"] = rows
     except Exception as e:
-        log_queue.put(f"\n오류가 발생했습니다: {e}\n")
+        with _state_lock:
+            _state["error"] = str(e)
+        print(f"\n오류가 발생했습니다: {e}\n")
     finally:
         sys.stdout = old_stdout
-        log_queue.put(("__DONE__", output_path))
+        with _state_lock:
+            _state["running"] = False
+            _state["done"] = True
 
 
-# "포근한 화이트"(A) 시안의 여백/모양 + "미니멀 카드"(C) 시안의 색감을 섞은 색상표
-BG_COLOR = "#f7f7f5"        # 창 배경 (C의 옅은 그레이)
-CARD_BG = "#ffffff"         # 카드(폼) 배경
-CARD_BORDER = "#e2e2de"     # 카드 테두리
-TITLE_COLOR = "#16181d"     # C의 잉크색
-LABEL_COLOR = "#53565c"
-NOTE_COLOR = "#8b8c86"      # 입력창 아래 안내 문구
-INPUT_BORDER = "#e2e2de"    # 입력창 테두리 (평소)
-ACCENT_COLOR = "#3554d1"    # C의 포인트 인디고블루
-ACCENT_HOVER = "#2c46b3"
-ACCENT_DISABLED = "#a9b6ea"
-STOP_FILL = "#f7e8e5"       # 중지 버튼 배경 (옅은 러스트 톤)
-STOP_FILL_HOVER = "#f0dbd6"
-STOP_TEXT = "#a33f2b"       # 중지 버튼 글자색 (C의 러스트레드)
-LOG_TEXT = "#4b4c48"
-TITLE_TEXT = "🦅 독수리오형제 Project"
+def _open_file(path):
+    if sys.platform.startswith("win"):
+        os.startfile(path)
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", path])
+    else:
+        subprocess.Popen(["xdg-open", path])
 
 
-class App:
-    def __init__(self, root):
-        self.root = root
-        root.title("네이버 맛집 리뷰 검색기")
-        root.configure(bg=BG_COLOR)
+_PAGE_HTML = """<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>네이버 맛집 리뷰 검색기</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #f7f7f5;
+    color: #16181d;
+    font-family: "Apple SD Gothic Neo", "Malgun Gothic", "Pretendard", sans-serif;
+    padding: 36px 20px 60px;
+  }
+  .wrap { max-width: 640px; margin: 0 auto; }
+  .card {
+    background: #ffffff;
+    border: 1px solid #e2e2de;
+    border-radius: 14px;
+    padding: 32px 36px;
+    box-shadow: 0 18px 40px -24px rgba(0,0,0,0.18);
+  }
+  .title {
+    font-size: 17px;
+    font-weight: 800;
+    margin-bottom: 22px;
+  }
+  .field { margin-bottom: 16px; }
+  .field label {
+    display: block;
+    font-size: 12.5px;
+    font-weight: 700;
+    color: #53565c;
+    margin-bottom: 7px;
+  }
+  .field input {
+    width: 100%;
+    border: 1px solid #e2e2de;
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 13.5px;
+    color: #16181d;
+    font-family: inherit;
+  }
+  .field input:focus {
+    outline: none;
+    border-color: #3554d1;
+  }
+  .field .note {
+    font-size: 11.5px;
+    color: #8b8c86;
+    margin-top: 6px;
+  }
+  .actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin: 20px 0 4px;
+  }
+  button {
+    border: none;
+    border-radius: 999px;
+    padding: 10px 22px;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  button:disabled { cursor: default; opacity: 0.55; }
+  #stopBtn { background: #f7e8e5; color: #a33f2b; }
+  #runBtn { background: #3554d1; color: #ffffff; }
+  #runBtn:hover:not(:disabled) { background: #2c46b3; }
+  #stopBtn:hover:not(:disabled) { background: #f0dbd6; }
 
-        card = tk.Frame(
-            root, bg=CARD_BG, padx=40, pady=32,
-            highlightbackground=CARD_BORDER, highlightthickness=1,
-        )
-        card.pack(padx=30, pady=30)
-        card.grid_columnconfigure(1, weight=1)
+  .log {
+    margin-top: 18px;
+    background: #ffffff;
+    border: 1px solid #e2e2de;
+    border-radius: 12px;
+    padding: 14px 16px;
+    font-size: 12px;
+    line-height: 1.75;
+    color: #4b4c48;
+    white-space: pre-wrap;
+    height: 220px;
+    overflow-y: auto;
+  }
 
-        title = tk.Label(
-            card, text=TITLE_TEXT, font=("맑은 고딕", 15, "bold"),
-            bg=CARD_BG, fg=TITLE_COLOR,
-        )
-        title.grid(row=0, column=0, columnspan=2, pady=(0, 24))
+  .results {
+    margin-top: 18px;
+    display: none;
+  }
+  .results-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .results-head .count { font-size: 13.5px; font-weight: 700; }
+  .results-head .path { font-size: 11.5px; color: #8b8c86; }
+  .table-wrap {
+    border: 1px solid #e2e2de;
+    border-radius: 12px;
+    overflow: auto;
+    max-height: 360px;
+    background: #ffffff;
+  }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  th, td {
+    padding: 9px 12px;
+    text-align: left;
+    border-bottom: 1px solid #eeeeec;
+    white-space: nowrap;
+  }
+  th {
+    position: sticky; top: 0;
+    background: #f2f3f8;
+    color: #33352f;
+    font-weight: 700;
+  }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.wrap-cell { white-space: normal; max-width: 260px; }
+  a.maplink { color: #3554d1; text-decoration: none; }
+  a.maplink:hover { text-decoration: underline; }
 
-        self.district_entry = self._add_field(card, 1, "희망지역", "ex. 서울, 부산, 강남구 등")
-        self.groups_entry = self._add_field(card, 3, "키워드", "ex. 한식 맛집, 새로오픈한맛집 등")
-        self.brand_entry = self._add_field(card, 5, "브랜드", "ex. 스타벅스, 교촌치킨 등 (특정 브랜드만 찾을 때)")
-        self.review_entry = self._add_field(card, 7, "기준리뷰수", "*기준 리뷰수 이상 리뷰가 달린 브랜드만 수집합니다. (비워두면 전부 수집)")
+  .bottom-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 14px;
+  }
+  #openBtn { background: #eef1fb; color: #3554d1; }
+  #quitBtn { background: #f2f2ef; color: #53565c; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="title">&#128465; 독수리오형제 Project</div>
 
-        button_row = tk.Frame(card, bg=CARD_BG)
-        button_row.grid(row=9, column=1, sticky="e", pady=(16, 0))
+    <div class="field">
+      <label>희망지역</label>
+      <input id="district" type="text">
+      <div class="note">ex. 서울, 부산, 강남구 등</div>
+    </div>
+    <div class="field">
+      <label>키워드</label>
+      <input id="keyword" type="text">
+      <div class="note">ex. 한식 맛집, 새로오픈한맛집 등</div>
+    </div>
+    <div class="field">
+      <label>브랜드</label>
+      <input id="brand" type="text">
+      <div class="note">ex. 스타벅스, 교촌치킨 등 (특정 브랜드만 찾을 때)</div>
+    </div>
+    <div class="field">
+      <label>기준리뷰수</label>
+      <input id="minReviews" type="text">
+      <div class="note">*기준 리뷰수 이상 리뷰가 달린 브랜드만 수집합니다. (비워두면 전부 수집)</div>
+    </div>
 
-        self.stop_button = tk.Button(
-            button_row, text="중지", command=self.stop,
-            bg=STOP_FILL, fg=STOP_TEXT, font=("맑은 고딕", 11, "bold"),
-            padx=24, pady=8, relief="flat", bd=0,
-            activebackground=STOP_FILL_HOVER, activeforeground=STOP_TEXT,
-            cursor="hand2", state="disabled",
-        )
-        self.stop_button.pack(side="left", padx=(0, 8))
-        self.stop_button.bind("<Enter>", lambda e: self._set_stop_hover(True))
-        self.stop_button.bind("<Leave>", lambda e: self._set_stop_hover(False))
+    <div class="actions">
+      <button id="stopBtn" disabled>중지</button>
+      <button id="runBtn">실행</button>
+    </div>
+  </div>
 
-        self.run_button = tk.Button(
-            button_row, text="실행", command=self.start,
-            bg=ACCENT_COLOR, fg="white", font=("맑은 고딕", 11, "bold"),
-            padx=24, pady=8, relief="flat", bd=0,
-            activebackground=ACCENT_HOVER, activeforeground="white",
-            cursor="hand2",
-        )
-        self.run_button.pack(side="left")
-        self.run_button.bind("<Enter>", lambda e: self._set_button_hover(True))
-        self.run_button.bind("<Leave>", lambda e: self._set_button_hover(False))
+  <div id="log" class="log"></div>
 
-        self.stop_event = None
+  <div id="results" class="results">
+    <div class="results-head">
+      <div class="count" id="resultCount"></div>
+      <div class="path" id="resultPath"></div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>브랜드명</th><th>키워드</th><th>카테고리</th><th>리뷰수</th><th>대표 리뷰</th><th>네이버지도주소</th>
+          </tr>
+        </thead>
+        <tbody id="resultBody"></tbody>
+      </table>
+    </div>
+    <div class="bottom-actions">
+      <button id="quitBtn">종료</button>
+      <button id="openBtn">Excel 파일 열기</button>
+    </div>
+  </div>
+</div>
 
-        self.log_box = scrolledtext.ScrolledText(
-            root, width=100, height=22, state="disabled",
-            bg=CARD_BG, fg=LOG_TEXT, relief="flat",
-            highlightbackground=CARD_BORDER, highlightthickness=1,
-            font=("맑은 고딕", 10),
-        )
-        self.log_box.pack(padx=30, pady=(0, 30), fill="both", expand=True)
+<script>
+  const districtEl = document.getElementById("district");
+  const keywordEl = document.getElementById("keyword");
+  const brandEl = document.getElementById("brand");
+  const minReviewsEl = document.getElementById("minReviews");
+  const runBtn = document.getElementById("runBtn");
+  const stopBtn = document.getElementById("stopBtn");
+  const logEl = document.getElementById("log");
+  const resultsEl = document.getElementById("results");
+  const resultCountEl = document.getElementById("resultCount");
+  const resultPathEl = document.getElementById("resultPath");
+  const resultBodyEl = document.getElementById("resultBody");
+  const openBtn = document.getElementById("openBtn");
+  const quitBtn = document.getElementById("quitBtn");
 
-        self.log_queue = queue.Queue()
-        self.root.after(200, self._poll_queue)
+  let polling = null;
+  let shownDone = false;
 
-    def _add_field(self, parent, row, label_text, note_text=None):
-        label = tk.Label(
-            parent, text=label_text, bg=CARD_BG, fg=LABEL_COLOR,
-            font=("맑은 고딕", 10, "bold"), anchor="w", justify="left",
-        )
-        label.grid(row=row, column=0, sticky="w", pady=(8, 0))
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[c]));
+  }
 
-        entry = tk.Entry(
-            parent, font=("맑은 고딕", 11),
-            highlightbackground=INPUT_BORDER, highlightcolor=ACCENT_COLOR,
-            highlightthickness=1, relief="flat", bd=6,
-        )
-        entry.grid(row=row, column=1, pady=(8, 0), sticky="ew")
+  function renderResults(data) {
+    resultsEl.style.display = "block";
+    resultCountEl.textContent = `결과: ${data.rows.length}곳`;
+    resultPathEl.textContent = data.output_path ? data.output_path : "";
+    resultBodyEl.innerHTML = data.rows.map(r => `
+      <tr>
+        <td>${escapeHtml(r["브랜드명"] || "")}</td>
+        <td>${escapeHtml(r["키워드"] || "")}</td>
+        <td>${escapeHtml(r["카테고리"] || "")}</td>
+        <td class="num">${escapeHtml(r["리뷰수"] || 0)}</td>
+        <td class="wrap-cell">${escapeHtml(r["대표 리뷰"] || "")}</td>
+        <td>${r["네이버지도주소"] ? `<a class="maplink" href="${escapeHtml(r["네이버지도주소"])}" target="_blank" rel="noopener">지도 열기</a>` : ""}</td>
+      </tr>
+    `).join("");
+  }
 
-        if note_text:
-            note = tk.Label(
-                parent, text=note_text, bg=CARD_BG, fg=NOTE_COLOR, font=("맑은 고딕", 9),
-            )
-            note.grid(row=row + 1, column=1, sticky="w", pady=(0, 4))
+  function poll() {
+    fetch("/status").then(r => r.json()).then(data => {
+      logEl.textContent = data.log;
+      logEl.scrollTop = logEl.scrollHeight;
 
-        return entry
+      runBtn.disabled = data.running;
+      runBtn.textContent = data.running ? "실행 중..." : "실행";
+      stopBtn.disabled = !data.running;
 
-    def _append_log(self, text):
-        self.log_box.configure(state="normal")
-        self.log_box.insert("end", text)
-        self.log_box.see("end")
-        self.log_box.configure(state="disabled")
+      if (data.done && !data.running && !shownDone) {
+        shownDone = true;
+        renderResults(data);
+      }
+    }).catch(() => {});
+  }
 
-    def _set_button_hover(self, hovering):
-        if str(self.run_button["state"]) == "disabled":
-            return
-        self.run_button.configure(bg=ACCENT_HOVER if hovering else ACCENT_COLOR)
+  runBtn.addEventListener("click", () => {
+    const district = districtEl.value.trim();
+    const keyword = keywordEl.value.trim();
+    const brand = brandEl.value.trim();
+    if (!district && !keyword && !brand) {
+      alert("희망지역 / 키워드 / 브랜드 중 하나는 입력해주세요.");
+      return;
+    }
+    shownDone = false;
+    resultsEl.style.display = "none";
+    logEl.textContent = "";
 
-    def _set_stop_hover(self, hovering):
-        if str(self.stop_button["state"]) == "disabled":
-            return
-        self.stop_button.configure(bg=STOP_FILL_HOVER if hovering else STOP_FILL)
+    fetch("/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        district: district,
+        groups: keyword,
+        brand: brand,
+        min_reviews: minReviewsEl.value.trim(),
+      }),
+    }).then(r => r.json()).then(data => {
+      if (!data.ok) alert(data.error || "시작하지 못했습니다.");
+    });
+  });
 
-    def _poll_queue(self):
+  stopBtn.addEventListener("click", () => {
+    fetch("/stop", { method: "POST" });
+  });
+
+  openBtn.addEventListener("click", () => {
+    fetch("/open-file", { method: "POST" });
+  });
+
+  quitBtn.addEventListener("click", () => {
+    fetch("/shutdown", { method: "POST" }).finally(() => {
+      document.body.innerHTML = "<div style='padding:60px;text-align:center;color:#8b8c86;font-family:sans-serif;'>프로그램을 종료했습니다. 이 탭은 닫으셔도 됩니다.</div>";
+      clearInterval(polling);
+    });
+  });
+
+  polling = setInterval(poll, 1000);
+  poll();
+</script>
+</body>
+</html>
+"""
+
+
+class _Handler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        pass
+
+    def _send_json(self, obj, status=200):
+        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _read_json_body(self):
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        raw = self.rfile.read(length) if length else b""
         try:
-            while True:
-                item = self.log_queue.get_nowait()
-                if isinstance(item, tuple) and item[:1] == ("__DONE__",):
-                    output_path = item[1]
-                    self.run_button.configure(state="normal", text="실행", bg=ACCENT_COLOR)
-                    self.stop_button.configure(state="disabled", bg=STOP_FILL)
-                    self.stop_event = None
-                    self._append_log("\n===== 완료! 결과 엑셀 파일을 확인하세요 =====\n")
-                    self._notify_done(output_path)
-                else:
-                    self._append_log(item)
-        except queue.Empty:
-            pass
-        self.root.after(200, self._poll_queue)
+            return json.loads(raw.decode("utf-8")) if raw else {}
+        except Exception:
+            return {}
 
-    def _notify_done(self, output_path):
-        if not output_path or not os.path.exists(output_path):
-            messagebox.showinfo("완료", "검색이 끝났습니다.\n(저장된 결과 파일을 찾지 못했어요 - 조건에 맞는 가게가 없었을 수 있어요.)")
-            return
-
-        filename = os.path.basename(output_path)
-        if messagebox.askyesno("완료", f"검색이 끝났습니다!\n\n'{filename}' 파일을 지금 확인하시겠어요?"):
-            self._open_file(output_path)
-
-    def _open_file(self, path):
-        try:
-            if sys.platform.startswith("win"):
-                os.startfile(path)
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", path])
-            else:
-                subprocess.Popen(["xdg-open", path])
-        except Exception as e:
-            messagebox.showwarning("열기 실패", f"파일을 여는 데 실패했습니다: {e}")
-
-    def start(self):
-        district = self.district_entry.get().strip()
-        groups_text = self.groups_entry.get().strip()
-        brand = self.brand_entry.get().strip()
-        review_text = self.review_entry.get().strip()
-
-        if not district and not groups_text and not brand:
-            messagebox.showwarning("입력 필요", "희망지역 / 키워드 / 브랜드 중 하나는 입력해주세요.")
-            return
-
-        if review_text:
-            try:
-                min_reviews = int(review_text.replace(",", ""))
-            except ValueError:
-                messagebox.showwarning("입력 오류", "기준 리뷰 수는 숫자로 입력해주세요.")
-                return
+    def do_GET(self):
+        if self.path == "/" or self.path.startswith("/?"):
+            body = _PAGE_HTML.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif self.path == "/status":
+            with _state_lock:
+                snapshot = dict(_state)
+            self._send_json(snapshot)
         else:
-            min_reviews = 0
+            self.send_response(404)
+            self.end_headers()
 
-        self.run_button.configure(state="disabled", text="실행 중...", bg=ACCENT_DISABLED)
-        self.stop_button.configure(state="normal", bg=STOP_FILL)
-        summary = " / ".join(p for p in (district, groups_text, brand) if p)
-        self._append_log(f"\n===== '{summary}' (리뷰 {min_reviews}개 이상) 검색 시작 =====\n")
+    def do_POST(self):
+        global _stop_event
+        payload = self._read_json_body()
 
-        self.stop_event = threading.Event()
-        thread = threading.Thread(
-            target=_run_scraper_in_thread,
-            args=(district, groups_text, brand, min_reviews, self.log_queue, self.stop_event),
-            daemon=True,
-        )
-        thread.start()
+        if self.path == "/start":
+            with _state_lock:
+                already_running = _state["running"]
+            if already_running:
+                self._send_json({"ok": False, "error": "이미 실행 중입니다."})
+                return
 
-    def stop(self):
-        if self.stop_event is None:
-            return
-        self.stop_event.set()
-        self.stop_button.configure(state="disabled", bg=STOP_FILL)
-        self._append_log("\n===== 중지 요청함 - 지금까지 모은 것만 저장하고 곧 끝납니다 =====\n")
+            district = (payload.get("district") or "").strip()
+            groups_text = (payload.get("groups") or "").strip()
+            brand = (payload.get("brand") or "").strip()
+            min_reviews_raw = (payload.get("min_reviews") or "").strip()
+            if not district and not groups_text and not brand:
+                self._send_json({"ok": False, "error": "희망지역 / 키워드 / 브랜드 중 하나는 입력해주세요."})
+                return
+            try:
+                min_reviews = int(min_reviews_raw.replace(",", "")) if min_reviews_raw else 0
+            except ValueError:
+                self._send_json({"ok": False, "error": "기준 리뷰 수는 숫자로 입력해주세요."})
+                return
+
+            with _state_lock:
+                _state.update({"running": True, "log": "", "done": False, "rows": [], "output_path": None, "error": None})
+            _stop_event = threading.Event()
+            thread = threading.Thread(target=_run_scraper, args=(district, groups_text, brand, min_reviews), daemon=True)
+            thread.start()
+            self._send_json({"ok": True})
+
+        elif self.path == "/stop":
+            if _stop_event is not None:
+                _stop_event.set()
+            self._send_json({"ok": True})
+
+        elif self.path == "/open-file":
+            with _state_lock:
+                path = _state.get("output_path")
+            if path and os.path.exists(path):
+                try:
+                    _open_file(path)
+                except Exception:
+                    pass
+            self._send_json({"ok": True})
+
+        elif self.path == "/shutdown":
+            self._send_json({"ok": True})
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
+
+        else:
+            self.send_response(404)
+            self.end_headers()
 
 
 def main():
-    root = tk.Tk()
-    App(root)
-    root.mainloop()
+    url = f"http://127.0.0.1:{PORT}/"
+    try:
+        httpd = socketserver.TCPServer(("127.0.0.1", PORT), _Handler)
+    except OSError:
+        # 이미 이 프로그램이 실행 중인 것으로 보고, 새로 띄우지 않고 브라우저 탭만 연다.
+        webbrowser.open(url)
+        return
+
+    webbrowser.open(url)
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":
