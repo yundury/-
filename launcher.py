@@ -6,6 +6,7 @@ config.py를 매번 열어서 고치지 않아도 되도록, 지역/키워드/�
 실행 방법: python launcher.py
 """
 
+import importlib
 import os
 import queue
 import subprocess
@@ -41,7 +42,13 @@ def _run_scraper_in_thread(district, groups_text, brand, min_reviews, log_queue,
     보내서, 지금까지 모은 것만이라도 저장하고 멈추게 한다.
 
     희망지역/키워드/브랜드/기준리뷰수는 전부 비워둬도 되는 선택 입력이다.
+
+    맨 처음에 config.py를 다시 읽어온다 - GUI 창을 계속 켜둔 채로 config.py의
+    NOTION_ENABLED 같은 값을 고친 경우에도, 새로 실행할 때는 방금 저장한 값을
+    반영해야 하기 때문이다 (안 그러면 프로그램이 켜져 있는 동안 맨 처음 읽은
+    값을 계속 쓰게 된다).
     """
+    importlib.reload(config)
     config.DISTRICT = district
     config.PRODUCT_GROUPS = [g.strip() for g in groups_text.replace(",", "\n").split("\n") if g.strip()]
     config.BRAND = brand
