@@ -126,15 +126,23 @@ def _find_existing_page(token, database_id, brand_name):
     return results[0]["id"] if results else None
 
 
-def push_rows_to_notion(rows, token, parent_page_id):
+def push_rows_to_notion(rows, enabled, token, parent_page_id):
     """rows(엑셀에 저장한 것과 같은 딕셔너리 리스트)를 노션 데이터베이스에 올린다.
     이미 같은 브랜드명의 행이 있으면 업데이트하고, 없으면 새로 추가한다.
 
     엑셀 저장이 이미 끝난 뒤에 호출되는 걸 전제로 하며, 여기서 오류가 나도
     이미 저장된 엑셀 파일에는 영향이 없다 (호출하는 쪽에서 try/except로 감싼다).
+
+    켜져 있는지/꺼져 있는지, 설정이 비어 있는지와 상관없이 매번 실행할 때마다
+    "[노션]"으로 시작하는 줄을 하나는 반드시 출력한다 - 그래야 아무 반응이 없는
+    것처럼 보이는 상황(설정이 실제로는 안 켜진 경우 등)을 겪지 않는다.
     """
+    if not enabled:
+        print("[노션] 업로드 기능이 꺼져 있어서 건너뜁니다. (config.py에서 NOTION_ENABLED = True 로 바꾸면 켜집니다)")
+        return
+
     if not token or not parent_page_id:
-        print("[노션] NOTION_TOKEN / NOTION_PARENT_PAGE_ID가 비어 있어서 노션 업로드를 건너뜁니다.")
+        print("[노션] NOTION_ENABLED = True 이지만 NOTION_TOKEN / NOTION_PARENT_PAGE_ID가 비어 있어서 건너뜁니다.")
         return
 
     print(f"[노션] 결과를 노션 표에 올리는 중... (총 {len(rows)}곳)")
