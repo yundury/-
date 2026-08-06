@@ -106,8 +106,10 @@ _PAGE_HTML = """<!doctype html>
     font-family: "Apple SD Gothic Neo", "Malgun Gothic", "Pretendard", sans-serif;
     padding: 36px 20px 60px;
   }
-  .wrap { max-width: 640px; margin: 0 auto; }
+  .wrap { max-width: 1080px; margin: 0 auto; }
   .card {
+    max-width: 640px;
+    margin: 0 auto;
     background: #ffffff;
     border: 1px solid #e2e2de;
     border-radius: 14px;
@@ -213,7 +215,7 @@ _PAGE_HTML = """<!doctype html>
     font-weight: 700;
   }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
-  td.wrap-cell { white-space: normal; max-width: 260px; }
+  td.wrap-cell { white-space: normal; max-width: 460px; }
   a.maplink { color: #3554d1; text-decoration: none; }
   a.maplink:hover { text-decoration: underline; }
 
@@ -230,7 +232,7 @@ _PAGE_HTML = """<!doctype html>
 <body>
 <div class="wrap">
   <div class="card">
-    <div class="title">&#128465; 독수리오형제 Project</div>
+    <div class="title">&#129413; 독수리오형제 Project</div>
 
     <div class="field">
       <label>희망지역</label>
