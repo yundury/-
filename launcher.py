@@ -70,17 +70,21 @@ def _run_scraper_in_thread(district, groups_text, brand, min_reviews, log_queue,
         log_queue.put(("__DONE__", output_path))
 
 
-# 디자이너가 만든 HTML/CSS 시안(모던 플랫 스타일)에 맞춘 색상표
-BG_COLOR = "#f4f6f8"       # 창 배경 (은은한 밝은 회색)
-CARD_BG = "#ffffff"        # 카드(폼) 배경
-CARD_BORDER = "#e9ecef"    # 카드 테두리 (그림자 대신 은은한 선으로 구분)
-TITLE_COLOR = "#111111"
-LABEL_COLOR = "#495057"
-INPUT_BORDER = "#dee2e6"   # 입력창 테두리 (평소)
-ACCENT_COLOR = "#3b82f6"   # 포인트 블루 (포커스/버튼)
-ACCENT_HOVER = "#2563eb"   # 버튼 위에 마우스 올렸을 때
-STOP_COLOR = "#ef4444"     # 중지 버튼 (빨강)
-STOP_HOVER = "#dc2626"
+# "포근한 화이트"(A) 시안의 여백/모양 + "미니멀 카드"(C) 시안의 색감을 섞은 색상표
+BG_COLOR = "#f7f7f5"        # 창 배경 (C의 옅은 그레이)
+CARD_BG = "#ffffff"         # 카드(폼) 배경
+CARD_BORDER = "#e2e2de"     # 카드 테두리
+TITLE_COLOR = "#16181d"     # C의 잉크색
+LABEL_COLOR = "#53565c"
+NOTE_COLOR = "#8b8c86"      # 입력창 아래 안내 문구
+INPUT_BORDER = "#e2e2de"    # 입력창 테두리 (평소)
+ACCENT_COLOR = "#3554d1"    # C의 포인트 인디고블루
+ACCENT_HOVER = "#2c46b3"
+ACCENT_DISABLED = "#a9b6ea"
+STOP_FILL = "#f7e8e5"       # 중지 버튼 배경 (옅은 러스트 톤)
+STOP_FILL_HOVER = "#f0dbd6"
+STOP_TEXT = "#a33f2b"       # 중지 버튼 글자색 (C의 러스트레드)
+LOG_TEXT = "#4b4c48"
 TITLE_TEXT = "🦅 독수리오형제 Project"
 
 
@@ -113,9 +117,9 @@ class App:
 
         self.stop_button = tk.Button(
             button_row, text="중지", command=self.stop,
-            bg=STOP_COLOR, fg="white", font=("맑은 고딕", 11, "bold"),
+            bg=STOP_FILL, fg=STOP_TEXT, font=("맑은 고딕", 11, "bold"),
             padx=24, pady=8, relief="flat", bd=0,
-            activebackground=STOP_HOVER, activeforeground="white",
+            activebackground=STOP_FILL_HOVER, activeforeground=STOP_TEXT,
             cursor="hand2", state="disabled",
         )
         self.stop_button.pack(side="left", padx=(0, 8))
@@ -137,7 +141,7 @@ class App:
 
         self.log_box = scrolledtext.ScrolledText(
             root, width=100, height=22, state="disabled",
-            bg=CARD_BG, fg="#212529", relief="flat",
+            bg=CARD_BG, fg=LOG_TEXT, relief="flat",
             highlightbackground=CARD_BORDER, highlightthickness=1,
             font=("맑은 고딕", 10),
         )
@@ -162,7 +166,7 @@ class App:
 
         if note_text:
             note = tk.Label(
-                parent, text=note_text, bg=CARD_BG, fg=LABEL_COLOR, font=("맑은 고딕", 9),
+                parent, text=note_text, bg=CARD_BG, fg=NOTE_COLOR, font=("맑은 고딕", 9),
             )
             note.grid(row=row + 1, column=1, sticky="w", pady=(0, 4))
 
@@ -182,7 +186,7 @@ class App:
     def _set_stop_hover(self, hovering):
         if str(self.stop_button["state"]) == "disabled":
             return
-        self.stop_button.configure(bg=STOP_HOVER if hovering else STOP_COLOR)
+        self.stop_button.configure(bg=STOP_FILL_HOVER if hovering else STOP_FILL)
 
     def _poll_queue(self):
         try:
@@ -191,7 +195,7 @@ class App:
                 if isinstance(item, tuple) and item[:1] == ("__DONE__",):
                     output_path = item[1]
                     self.run_button.configure(state="normal", text="실행", bg=ACCENT_COLOR)
-                    self.stop_button.configure(state="disabled", bg=STOP_COLOR)
+                    self.stop_button.configure(state="disabled", bg=STOP_FILL)
                     self.stop_event = None
                     self._append_log("\n===== 완료! 결과 엑셀 파일을 확인하세요 =====\n")
                     self._notify_done(output_path)
@@ -240,8 +244,8 @@ class App:
         else:
             min_reviews = 0
 
-        self.run_button.configure(state="disabled", text="실행 중...", bg="#93c5fd")
-        self.stop_button.configure(state="normal", bg=STOP_COLOR)
+        self.run_button.configure(state="disabled", text="실행 중...", bg=ACCENT_DISABLED)
+        self.stop_button.configure(state="normal", bg=STOP_FILL)
         summary = " / ".join(p for p in (district, groups_text, brand) if p)
         self._append_log(f"\n===== '{summary}' (리뷰 {min_reviews}개 이상) 검색 시작 =====\n")
 
@@ -257,7 +261,7 @@ class App:
         if self.stop_event is None:
             return
         self.stop_event.set()
-        self.stop_button.configure(state="disabled", bg=STOP_COLOR)
+        self.stop_button.configure(state="disabled", bg=STOP_FILL)
         self._append_log("\n===== 중지 요청함 - 지금까지 모은 것만 저장하고 곧 끝납니다 =====\n")
 
 
