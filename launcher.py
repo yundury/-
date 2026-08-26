@@ -116,7 +116,7 @@ _PAGE_HTML = """<!doctype html>
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<title>네이버 맛집 리뷰 검색기</title>
+<title>Up Project 08. AX</title>
 <style>
   * { box-sizing: border-box; }
   body {
@@ -137,7 +137,12 @@ _PAGE_HTML = """<!doctype html>
   .title {
     font-size: 20px;
     font-weight: 800;
-    margin-bottom: 8px;
+    margin-bottom: 4px;
+  }
+  .credit {
+    font-size: 11px;
+    color: #a3a49d;
+    margin-bottom: 10px;
   }
   .subtitle {
     font-size: 13px;
@@ -324,7 +329,8 @@ _PAGE_HTML = """<!doctype html>
     <button id="quitBtn">프로그램 종료</button>
   </div>
   <div class="card">
-    <div class="title">&#129413; 독수리오형제 Project</div>
+    <div class="title">Up Project 08. AX</div>
+    <div class="credit">만든이: 김채윤, 김윤경, 정민정, 김선태, 홍지우 바이어</div>
     <div class="subtitle">희망지역 · 검색키워드 · 필터를 조합해서 네이버 지도에서 리뷰 많은 곳을 찾아드려요.</div>
 
     <div class="fields-grid">
