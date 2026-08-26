@@ -15,6 +15,7 @@ import socketserver
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 
 import config
@@ -90,6 +91,25 @@ def _open_file(path):
         subprocess.Popen(["open", path])
     else:
         subprocess.Popen(["xdg-open", path])
+
+
+def _graceful_shutdown(server):
+    """탭을 닫거나 종료 버튼을 눌렀을 때 프로그램을 끈다.
+
+    한창 검색 중이었다면 무작정 끄지 않고, "중지" 버튼을 누른 것과 똑같이
+    지금까지 모은 것만 저장하고 끝날 때까지 잠깐 기다린 뒤에 끈다 (그래야
+    실수로 탭을 닫아도 진행 중이던 결과를 잃지 않는다).
+    """
+    with _state_lock:
+        running = _state["running"]
+    if running and _stop_event is not None:
+        _stop_event.set()
+        for _ in range(1200):  # 최대 약 2분 대기
+            with _state_lock:
+                if not _state["running"]:
+                    break
+            time.sleep(0.1)
+    server.shutdown()
 
 
 _PAGE_HTML = """<!doctype html>
@@ -266,11 +286,28 @@ _PAGE_HTML = """<!doctype html>
     margin-top: 14px;
   }
   #openBtn { background: #eef1fb; color: #3554d1; }
-  #quitBtn { background: #f2f2ef; color: #53565c; }
+
+  .topbar {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 10px;
+  }
+  #quitBtn {
+    background: transparent;
+    color: #8b8c86;
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 4px 8px;
+    border-radius: 6px;
+  }
+  #quitBtn:hover { background: #ebebe8; color: #53565c; }
 </style>
 </head>
 <body>
 <div class="wrap">
+  <div class="topbar">
+    <button id="quitBtn">프로그램 종료</button>
+  </div>
   <div class="card">
     <div class="title">&#129413; 독수리오형제 Project</div>
     <div class="subtitle">희망지역 · 검색키워드 · 필터를 조합해서 네이버 지도에서 리뷰 많은 곳을 찾아드려요.</div>
@@ -329,7 +366,6 @@ _PAGE_HTML = """<!doctype html>
       </table>
     </div>
     <div class="bottom-actions">
-      <button id="quitBtn">종료</button>
       <button id="openBtn">Excel 파일 열기</button>
     </div>
   </div>
@@ -433,11 +469,23 @@ _PAGE_HTML = """<!doctype html>
     fetch("/open-file", { method: "POST" });
   });
 
+  let quitting = false;
+
   quitBtn.addEventListener("click", () => {
+    quitting = true;
     fetch("/shutdown", { method: "POST" }).finally(() => {
       document.body.innerHTML = "<div style='padding:60px;text-align:center;color:#8b8c86;font-family:sans-serif;'>프로그램을 종료했습니다. 이 탭은 닫으셔도 됩니다.</div>";
       clearInterval(polling);
     });
+  });
+
+  // 탭/창을 그냥 닫아도 자동으로 프로그램이 꺼지도록 한다. sendBeacon은 페이지가
+  // 닫히는 도중에도 요청이 확실히 전달되도록 브라우저가 보장해주는 방식이다.
+  // (검색 중이었다면 서버 쪽에서 "중지"와 똑같이 지금까지 모은 것만 저장하고 끈다.)
+  window.addEventListener("pagehide", () => {
+    if (!quitting) {
+      navigator.sendBeacon("/shutdown");
+    }
   });
 
   polling = setInterval(poll, 1000);
@@ -532,7 +580,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
         elif self.path == "/shutdown":
             self._send_json({"ok": True})
-            threading.Thread(target=self.server.shutdown, daemon=True).start()
+            threading.Thread(target=_graceful_shutdown, args=(self.server,), daemon=True).start()
 
         else:
             self.send_response(404)
