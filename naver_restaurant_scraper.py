@@ -377,6 +377,8 @@ def _read_ai_briefing_snippet(page, entry_frame, max_scrolls=8):
     로딩되는 시점이 다를 수 있다. 그래서 1) 제목 글자가 나타날 때까지 조금씩
     스크롤해서 찾고, 2) 제목을 찾으면 그 위치로 정확히 스크롤을 맞춘 뒤,
     3) 내용이 마저 로딩되길 몇 번 더 기다려본다.
+
+    반환값: (선택된 요약 문장 또는 빈 문자열, 원본 글자 디버그용 문자열)
     """
     for _ in range(max_scrolls):
         try:
@@ -396,10 +398,10 @@ def _read_ai_briefing_snippet(page, entry_frame, max_scrolls=8):
                     body_text = entry_frame.locator("body").inner_text(timeout=1500)
                 except Exception:
                     body_text = ""
-                snippet, _ = _parse_ai_briefing(body_text)
+                snippet, debug_context = _parse_ai_briefing(body_text)
                 if snippet and not any(h in snippet for h in _FOOTER_JUNK_HINTS):
-                    return snippet
-            return ""
+                    return snippet, debug_context
+            return "", debug_context
 
         try:
             box = entry_frame.locator("body").bounding_box()
@@ -410,7 +412,7 @@ def _read_ai_briefing_snippet(page, entry_frame, max_scrolls=8):
         page.mouse.wheel(0, 600)
         page.wait_for_timeout(400)
 
-    return ""
+    return "", "'AI 브리핑' 글자를 스크롤해도 못 찾았습니다."
 
 
 def _current_list_rows(page, search_frame, min_reviews, visited, stop_event=_NO_STOP):
@@ -510,11 +512,12 @@ def _current_list_rows(page, search_frame, min_reviews, visited, stop_event=_NO_
             # 나오는 곳 등, 미쉐린 검색에서 특히 자주 보임). 이 경우 상세 패널을
             # 스크롤해서 'AI 브리핑' 요약을 대신 가져온다.
             if not parsed["대표 리뷰"]:
-                ai_snippet = _read_ai_briefing_snippet(page, entry_frame)
+                ai_snippet, ai_debug_context = _read_ai_briefing_snippet(page, entry_frame)
                 if ai_snippet:
                     parsed["대표 리뷰"] = ai_snippet
                 if _ai_briefing_debug_shown[0] < 5:
                     print(f"  ---- (AI 브리핑 대체 디버그) {parsed['브랜드명']!r} -> {ai_snippet!r}")
+                    print(f"  AI 브리핑 원본 글자: {ai_debug_context}")
                     _ai_briefing_debug_shown[0] += 1
 
             if _category_debug_shown[0] < 3:
