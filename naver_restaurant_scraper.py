@@ -122,6 +122,9 @@ def _strip_leading_badges(text):
 # 리뷰 글을 뽑을 때 이런 줄은 제외한다.
 _STRUCTURAL_HINTS = ("혜택", "쿠폰", "포인트", "리뷰", "예약", "톡톡", "광고", "connect+", "포장주문")
 
+# 대표 리뷰 추출용 디버그를 몇 번 보여줬는지 (임시 디버그용)
+_review_debug_shown = [0]
+
 
 def _extract_review_snippet(lines):
     """목록 카드 안에 보이는 짧은 리뷰 후기 한 줄을 뽑아낸다.
@@ -134,12 +137,19 @@ def _extract_review_snippet(lines):
     candidates = [
         l for l in lines[1:] if len(l) >= 8 and not any(h in l for h in _STRUCTURAL_HINTS)
     ]
-    if not candidates:
-        return ""
 
-    complete = [c for c in candidates if not c.endswith("...") and not c.endswith("…")]
-    pool = complete if complete else candidates
-    return pool[-1]
+    result = ""
+    if candidates:
+        complete = [c for c in candidates if not c.endswith("...") and not c.endswith("…")]
+        pool = complete if complete else candidates
+        result = pool[-1]
+
+    if _review_debug_shown[0] < 5:
+        print(f"  ---- (대표 리뷰 디버그) 카드 줄들: {lines!r}")
+        print(f"  후보: {candidates!r} -> 선택: {result!r}")
+        _review_debug_shown[0] += 1
+
+    return result
 
 
 def _parse_list_item(text):
