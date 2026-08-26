@@ -125,7 +125,27 @@ def _strip_leading_badges(text):
 
 # 목록 항목 텍스트에서 리뷰 글(자유 문장)이 아닌, 구조적으로 나오는 문구들.
 # 리뷰 글을 뽑을 때 이런 줄은 제외한다.
-_STRUCTURAL_HINTS = ("혜택", "쿠폰", "포인트", "리뷰", "예약", "톡톡", "광고", "connect+", "포장주문")
+_STRUCTURAL_HINTS = (
+    "혜택", "쿠폰", "포인트", "리뷰", "예약", "톡톡", "광고", "connect+", "포장주문",
+    # 미쉐린 등 일부 카드는 리뷰 문장 대신 영업시간 상태만 나온다.
+    "영업 중", "영업 전", "영업 시작", "브레이크타임", "라스트오더",
+)
+
+# 리뷰 문장이 아니라 카드에 고정으로 붙는 버튼/배지 문구들 (줄 전체가 이거랑
+# 똑같으면 제외한다).
+_STRUCTURAL_EXACT_LINES = {
+    "상세주소 열기", "출발도착", "현재 위치에서", "플레이스 플러스", "네이버페이",
+    "휠체어 출입 가능",
+}
+
+# '서울 마포구 합정동'처럼 지역명만 딱 나오는 주소 줄 (리뷰가 아니라 주소다).
+_ADDRESS_LINE_RE = re.compile(
+    r"^(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)"
+    r"\S*\s+\S+(시|군|구)\s+\S+(동|읍|면|가|리)$"
+)
+
+# '6.7km'처럼 현재 위치에서의 거리만 나오는 줄.
+_DISTANCE_LINE_RE = re.compile(r"^\d+(\.\d+)?km$")
 
 # 대표 리뷰 추출용 디버그를 몇 번 보여줬는지 (임시 디버그용)
 _review_debug_shown = [0]
@@ -138,13 +158,25 @@ def _extract_review_snippet(lines):
     """목록 카드 안에 보이는 짧은 리뷰 후기 한 줄을 뽑아낸다.
 
     카드 아래쪽에 실제 리뷰어가 쓴 문장이 그대로 나오는 경우가 많다. 이름/카테고리/
-    배지/리뷰수 같은 '구조적인' 줄들을 제외하고 남는 자유 문장 중, 말줄임표(...)로
-    끝나지 않는(=안 잘린) 문장을 우선으로 마지막(카드 아래쪽에 가까운) 것을 고른다.
+    배지/리뷰수/영업시간/주소/거리/편의시설 태그 같은 '구조적인' 줄들을 제외하고
+    남는 자유 문장 중, 말줄임표(...)로 끝나지 않는(=안 잘린) 문장을 우선으로
+    마지막(카드 아래쪽에 가까운) 것을 고른다.
+
+    카드에 따라(예: 미쉐린 가이드 등) 리뷰 문장 자체가 아예 없이 영업시간/주소/
+    거리/편의시설 정보만 나오는 경우가 있다 - 이런 카드는 후보가 하나도 안 남아서
+    빈 문자열을 돌려주는 게 맞다 (호출하는 쪽에서 AI 브리핑으로 대신 채운다).
     """
-    # lines[0]은 가게 이름이라 리뷰 후보에서 제외한다.
-    candidates = [
-        l for l in lines[1:] if len(l) >= 8 and not any(h in l for h in _STRUCTURAL_HINTS)
-    ]
+    candidates = []
+    for l in lines[1:]:  # lines[0]은 가게 이름이라 리뷰 후보에서 제외한다.
+        if len(l) < 8:
+            continue
+        if any(h in l for h in _STRUCTURAL_HINTS):
+            continue
+        if l in _STRUCTURAL_EXACT_LINES:
+            continue
+        if _ADDRESS_LINE_RE.match(l) or _DISTANCE_LINE_RE.match(l):
+            continue
+        candidates.append(l)
 
     result = ""
     if candidates:
