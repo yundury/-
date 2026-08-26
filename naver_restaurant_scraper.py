@@ -261,15 +261,13 @@ def _parse_ai_briefing(text, max_items=2):
     section = text[match.end():match.end() + 1500]
     debug_context = f"'AI 브리핑' 뒤 1500자: {section!r}"
 
-    # '실험 단계로 정확하지 않을 수 있어요' / '~정리한 정보는 다음과 같습니다' /
-    # '다양한 리뷰를 종합해 주요 특징을 요약해 드립니다' 같은 고정 안내 문구는
-    # 실제 요약 내용이 아니므로 제거하고 시작한다 (문구가 바뀔 수 있어서 두 가지
-    # 패턴을 다 시도해본다).
-    for boilerplate in (r".*?정리한 정보는 다음과 같습니다\.?", r".*?요약해\s*드립니다\.?"):
-        new_section, count = re.subn(boilerplate, "", section, count=1, flags=re.S)
-        if count:
-            section = new_section
-            break
+    # '다양한 리뷰를 종합해 주요 특징을 요약해 드립니다.' / '주요 특징을 리뷰를
+    # 활용해 요약해 드리겠습니다.' 처럼, 안내 문구가 조금씩 다르게 나온다. 정확한
+    # 문구를 다 맞추는 대신, 맨 앞 문장이 '요약'이나 '정리'라는 말을 담고 있고
+    # '~습니다.'로 끝나면 안내 문구로 보고 통째로 제거한다.
+    first_sentence = re.match(r"^(.*?니다\.)\s*", section, flags=re.S)
+    if first_sentence and ("요약" in first_sentence.group(1) or "정리" in first_sentence.group(1)):
+        section = section[first_sentence.end():]
 
     # 각 요약 문장은 보통 끝에 '닉네임 +숫자' 형태의 출처 표시가 붙는다.
     bullets = re.findall(r"(.+?)\s*\S+\s*\+\d+", section, flags=re.S)
@@ -363,11 +361,22 @@ def _read_entry_details(page, entry_frame, need_review_count, max_attempts=6):
     return category, review_count
 
 
-def _read_ai_briefing_snippet(page, entry_frame, max_scrolls=6):
+# 'AI 브리핑' 제목은 찾았는데 그 바로 다음에 오는 게 실제 요약 내용이 아니라
+# 화면 맨 아래 공통 푸터(이용약관/고객센터 등)인 경우가 있다 - 아직 요약 내용이
+# 다 로딩되기 전이라 그런 것으로 보인다. 이런 경우는 "못 찾음"으로 취급해서
+# 계속 기다린다 (엉뚱한 푸터 글자를 대표 리뷰로 잘못 쓰지 않기 위해).
+_FOOTER_JUNK_HINTS = ("이용약관", "고객센터", "신고센터", "리뷰운영정책")
+
+
+def _read_ai_briefing_snippet(page, entry_frame, max_scrolls=8):
     """목록 카드 자체에는 리뷰 문장이 안 보이는 가게들이 있다 (예약/메뉴판 위주로만
     나오는 곳 등). 이런 경우엔 상세 패널을 아래로 스크롤하면 나오는 'AI 브리핑'
-    요약을 대신 가져온다. 'AI 브리핑'은 스크롤해서 그 위치까지 내려가야 로딩되는
-    경우가 많아서, 조금씩 스크롤해가며 몇 번 확인해본다.
+    요약을 대신 가져온다.
+
+    'AI 브리핑' 제목이 화면에 나타나는 시점과, 그 안의 실제 요약 문장이 다
+    로딩되는 시점이 다를 수 있다. 그래서 1) 제목 글자가 나타날 때까지 조금씩
+    스크롤해서 찾고, 2) 제목을 찾으면 그 위치로 정확히 스크롤을 맞춘 뒤,
+    3) 내용이 마저 로딩되길 몇 번 더 기다려본다.
     """
     for _ in range(max_scrolls):
         try:
@@ -375,9 +384,22 @@ def _read_ai_briefing_snippet(page, entry_frame, max_scrolls=6):
         except Exception:
             body_text = ""
 
-        snippet, _ = _parse_ai_briefing(body_text)
-        if snippet:
-            return snippet
+        if "AI 브리핑" in body_text:
+            try:
+                entry_frame.get_by_text("AI 브리핑").first.scroll_into_view_if_needed(timeout=2000)
+            except Exception:
+                pass
+
+            for _ in range(4):
+                page.wait_for_timeout(500)
+                try:
+                    body_text = entry_frame.locator("body").inner_text(timeout=1500)
+                except Exception:
+                    body_text = ""
+                snippet, _ = _parse_ai_briefing(body_text)
+                if snippet and not any(h in snippet for h in _FOOTER_JUNK_HINTS):
+                    return snippet
+            return ""
 
         try:
             box = entry_frame.locator("body").bounding_box()
@@ -385,8 +407,8 @@ def _read_ai_briefing_snippet(page, entry_frame, max_scrolls=6):
                 page.mouse.move(box["x"] + box["width"] / 2, box["y"] + min(box["height"] / 2, 400))
         except Exception:
             pass
-        page.mouse.wheel(0, 800)
-        page.wait_for_timeout(500)
+        page.mouse.wheel(0, 600)
+        page.wait_for_timeout(400)
 
     return ""
 
