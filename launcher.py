@@ -220,8 +220,23 @@ _PAGE_HTML = """<!doctype html>
   #runBtn:hover:not(:disabled) { background: #2c46b3; }
   #stopBtn:hover:not(:disabled) { background: #f0dbd6; }
 
-  .log {
+  .log-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
     margin-top: 18px;
+    margin-bottom: 6px;
+  }
+  .log-head .log-title { font-size: 12.5px; font-weight: 700; color: #53565c; }
+  #copyLogBtn {
+    background: #f2f2ef;
+    color: #53565c;
+    font-size: 11.5px;
+    padding: 5px 12px;
+  }
+  #copyLogBtn:hover { background: #e7e7e3; }
+
+  .log {
     background: #ffffff;
     border: 1px solid #e2e2de;
     border-radius: 12px;
@@ -348,6 +363,10 @@ _PAGE_HTML = """<!doctype html>
     </div>
   </div>
 
+  <div class="log-head">
+    <div class="log-title">진행 로그</div>
+    <button id="copyLogBtn">로그 복사</button>
+  </div>
   <div id="log" class="log"></div>
 
   <div id="results" class="results">
@@ -379,6 +398,7 @@ _PAGE_HTML = """<!doctype html>
   const runBtn = document.getElementById("runBtn");
   const stopBtn = document.getElementById("stopBtn");
   const logEl = document.getElementById("log");
+  const copyLogBtn = document.getElementById("copyLogBtn");
   const resultsEl = document.getElementById("results");
   const resultCountEl = document.getElementById("resultCount");
   const resultPathEl = document.getElementById("resultPath");
@@ -467,6 +487,16 @@ _PAGE_HTML = """<!doctype html>
 
   openBtn.addEventListener("click", () => {
     fetch("/open-file", { method: "POST" });
+  });
+
+  copyLogBtn.addEventListener("click", () => {
+    navigator.clipboard.writeText(logEl.textContent).then(() => {
+      const original = copyLogBtn.textContent;
+      copyLogBtn.textContent = "복사됨!";
+      setTimeout(() => { copyLogBtn.textContent = original; }, 1200);
+    }).catch(() => {
+      alert("복사에 실패했습니다. 로그 내용을 직접 드래그해서 복사해주세요.");
+    });
   });
 
   let quitting = false;
