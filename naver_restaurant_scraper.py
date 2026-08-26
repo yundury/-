@@ -77,16 +77,32 @@ def _district_only(address):
     return " ".join(parts[:2]) if len(parts) >= 2 else address
 
 
+# 리뷰 수 숫자 변환에 실패한 경우(=예상 못 한 형태)를 몇 번 보여줬는지 (임시 디버그용)
+_review_count_debug_shown = [0]
+
+
 def _parse_review_count(text):
     """'리뷰 1.1만', '리뷰 1,234' 같은 표기에서 숫자를 뽑아낸다.
 
     네이버 플레이스는 리뷰가 많으면 '1.1만'처럼 만/천 단위로 줄여서 보여준다.
+
+    가끔 예상 못 한 형태('리뷰' 뒤에 실제로는 숫자가 아닌 게 붙는 경우 등)를
+    만나면 숫자로 바꾸는 데 실패할 수 있다. 이때 통째로 멈추면(에러) 지금까지
+    모은 것도 다 날아가므로, 이 경우엔 '리뷰 수를 못 찾음'으로 보고 넘어간다.
     """
     match = re.search(r"리뷰\s*([\d,]+(?:\.\d+)?)\s*(만|천)?", text)
     if not match:
         return None
 
-    value = float(match.group(1).replace(",", ""))
+    digits = match.group(1).replace(",", "")
+    try:
+        value = float(digits)
+    except ValueError:
+        if _review_count_debug_shown[0] < 5:
+            print(f"  ---- (리뷰수 변환 실패 디버그) 매칭된 글자: {match.group(0)!r}")
+            _review_count_debug_shown[0] += 1
+        return None
+
     unit = match.group(2)
     if unit == "만":
         value *= 10000
