@@ -4,9 +4,14 @@
 엑셀로 저장하는 스크립트. 개별 가게의 상세 페이지에는 들어가지 않는다
 (하나씩 들어가면 훨씬 느려지고, 목록에 이미 필요한 정보가 다 있다).
 
-상세 페이지에 들어가서 정보를 읽는 코드(_try_get_extra_info, get_extra_info,
-_parse_ai_briefing 등)는 남겨두었지만 기본 흐름에서는 쓰지 않는다. 필요하면
-나중에 다시 불러 쓸 수 있다.
+기준 리뷰 수를 넘는 가게는 목록에서 클릭해 옆에 뜨는 상세 패널까지는 확인한다.
+목록 카드 자체에 리뷰 문장이 안 보이는 가게(미쉐린 등 일부 고급 음식점에서
+자주 보임)는 상세 패널을 스크롤해서 'AI 브리핑' 요약으로 대신 채운다
+(_parse_ai_briefing, _read_ai_briefing_snippet 참고).
+
+_try_get_extra_info, get_extra_info 등 별도 검색으로 상세 페이지에 다시
+들어가는 코드는 남겨두었지만 기본 흐름에서는 쓰지 않는다. 필요하면 나중에
+다시 불러 쓸 수 있다.
 
 네이버 지역검색 API는 더 이상 쓰지 않는다 (검색어당 5개 제한이 있고, 어차피
 목록 화면에 리뷰 수가 그대로 보이기 때문). API 키도 필요 없다.
@@ -125,6 +130,9 @@ _STRUCTURAL_HINTS = ("혜택", "쿠폰", "포인트", "리뷰", "예약", "톡�
 # 대표 리뷰 추출용 디버그를 몇 번 보여줬는지 (임시 디버그용)
 _review_debug_shown = [0]
 
+# AI 브리핑으로 대신 채운 경우를 몇 번 보여줬는지 (임시 디버그용)
+_ai_briefing_debug_shown = [0]
+
 
 def _extract_review_snippet(lines):
     """목록 카드 안에 보이는 짧은 리뷰 후기 한 줄을 뽑아낸다.
@@ -221,9 +229,15 @@ def _parse_ai_briefing(text, max_items=2):
     section = text[match.end():match.end() + 1500]
     debug_context = f"'AI 브리핑' 뒤 1500자: {section!r}"
 
-    # '실험 단계로 정확하지 않을 수 있어요' / '~정리한 정보는 다음과 같습니다' 같은
-    # 고정 안내 문구는 실제 요약 내용이 아니므로 제거하고 시작한다.
-    section = re.sub(r".*?정리한 정보는 다음과 같습니다\.?", "", section, count=1, flags=re.S)
+    # '실험 단계로 정확하지 않을 수 있어요' / '~정리한 정보는 다음과 같습니다' /
+    # '다양한 리뷰를 종합해 주요 특징을 요약해 드립니다' 같은 고정 안내 문구는
+    # 실제 요약 내용이 아니므로 제거하고 시작한다 (문구가 바뀔 수 있어서 두 가지
+    # 패턴을 다 시도해본다).
+    for boilerplate in (r".*?정리한 정보는 다음과 같습니다\.?", r".*?요약해\s*드립니다\.?"):
+        new_section, count = re.subn(boilerplate, "", section, count=1, flags=re.S)
+        if count:
+            section = new_section
+            break
 
     # 각 요약 문장은 보통 끝에 '닉네임 +숫자' 형태의 출처 표시가 붙는다.
     bullets = re.findall(r"(.+?)\s*\S+\s*\+\d+", section, flags=re.S)
@@ -315,6 +329,34 @@ def _read_entry_details(page, entry_frame, need_review_count, max_attempts=6):
         page.wait_for_timeout(400)
 
     return category, review_count
+
+
+def _read_ai_briefing_snippet(page, entry_frame, max_scrolls=6):
+    """목록 카드 자체에는 리뷰 문장이 안 보이는 가게들이 있다 (예약/메뉴판 위주로만
+    나오는 곳 등). 이런 경우엔 상세 패널을 아래로 스크롤하면 나오는 'AI 브리핑'
+    요약을 대신 가져온다. 'AI 브리핑'은 스크롤해서 그 위치까지 내려가야 로딩되는
+    경우가 많아서, 조금씩 스크롤해가며 몇 번 확인해본다.
+    """
+    for _ in range(max_scrolls):
+        try:
+            body_text = entry_frame.locator("body").inner_text(timeout=1500)
+        except Exception:
+            body_text = ""
+
+        snippet, _ = _parse_ai_briefing(body_text)
+        if snippet:
+            return snippet
+
+        try:
+            box = entry_frame.locator("body").bounding_box()
+            if box:
+                page.mouse.move(box["x"] + box["width"] / 2, box["y"] + min(box["height"] / 2, 400))
+        except Exception:
+            pass
+        page.mouse.wheel(0, 800)
+        page.wait_for_timeout(500)
+
+    return ""
 
 
 def _current_list_rows(page, search_frame, min_reviews, visited, stop_event=_NO_STOP):
@@ -409,6 +451,17 @@ def _current_list_rows(page, search_frame, min_reviews, visited, stop_event=_NO_
                 trimmed = parsed["브랜드명"][: -len(category)].strip()
                 if trimmed:
                     parsed["브랜드명"] = trimmed
+
+            # 목록 카드에는 리뷰 문장이 아예 안 보이는 가게들이 있다(예약/메뉴 위주로만
+            # 나오는 곳 등, 미쉐린 검색에서 특히 자주 보임). 이 경우 상세 패널을
+            # 스크롤해서 'AI 브리핑' 요약을 대신 가져온다.
+            if not parsed["대표 리뷰"]:
+                ai_snippet = _read_ai_briefing_snippet(page, entry_frame)
+                if ai_snippet:
+                    parsed["대표 리뷰"] = ai_snippet
+                if _ai_briefing_debug_shown[0] < 5:
+                    print(f"  ---- (AI 브리핑 대체 디버그) {parsed['브랜드명']!r} -> {ai_snippet!r}")
+                    _ai_briefing_debug_shown[0] += 1
 
             if _category_debug_shown[0] < 3:
                 try:
