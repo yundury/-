@@ -1,5 +1,5 @@
 """
-config.py를 매번 열어서 고치지 않아도 되도록, 지역/키워드/브랜드/기준 리뷰수를
+config.py를 매번 열어서 고치지 않아도 되도록, 지역/검색키워드/필터/기준 리뷰수를
 입력하는 화면을 로컬 웹페이지로 띄워주는 실행기입니다. 뒤에서는
 naver_restaurant_scraper.py의 크롤링 코드가 파이썬으로 그대로 돌아가고,
 화면만 사용자님 컴퓨터의 기본 브라우저에 새 탭으로 예쁘게 뜹니다.
@@ -155,6 +155,30 @@ _PAGE_HTML = """<!doctype html>
     color: #8b8c86;
     margin-top: 6px;
   }
+  .field-wide { grid-column: 1 / -1; }
+  .filter-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .pill {
+    border: 1px solid #dbe1f7;
+    background: #eef1fb;
+    color: #3554d1;
+    border-radius: 999px;
+    padding: 8px 16px;
+    font-size: 12.5px;
+    font-weight: 700;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
+  }
+  .pill:hover { background: #e2e7fa; }
+  .pill.active {
+    background: #3554d1;
+    border-color: #3554d1;
+    color: #ffffff;
+  }
   .actions {
     display: flex;
     justify-content: flex-end;
@@ -209,12 +233,14 @@ _PAGE_HTML = """<!doctype html>
     max-height: 360px;
     background: #ffffff;
   }
-  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  table { border-collapse: collapse; width: 100%; table-layout: fixed; font-size: 12px; }
   th, td {
     padding: 9px 12px;
     text-align: left;
     border-bottom: 1px solid #eeeeec;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   th {
     position: sticky; top: 0;
@@ -222,8 +248,14 @@ _PAGE_HTML = """<!doctype html>
     color: #33352f;
     font-weight: 700;
   }
+  th:nth-child(1), td:nth-child(1) { width: 15%; }
+  th:nth-child(2), td:nth-child(2) { width: 9%; }
+  th:nth-child(3), td:nth-child(3) { width: 10%; }
+  th:nth-child(4), td:nth-child(4) { width: 7%; }
+  th:nth-child(5), td:nth-child(5) { width: 49%; }
+  th:nth-child(6), td:nth-child(6) { width: 10%; }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
-  td.wrap-cell { white-space: normal; max-width: 460px; }
+  td.wrap-cell { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.6; }
   a.maplink { color: #3554d1; text-decoration: none; }
   a.maplink:hover { text-decoration: underline; }
 
@@ -241,7 +273,7 @@ _PAGE_HTML = """<!doctype html>
 <div class="wrap">
   <div class="card">
     <div class="title">&#129413; 독수리오형제 Project</div>
-    <div class="subtitle">희망지역 · 키워드 · 브랜드를 조합해서 네이버 지도에서 리뷰 많은 곳을 찾아드려요.</div>
+    <div class="subtitle">희망지역 · 검색키워드 · 필터를 조합해서 네이버 지도에서 리뷰 많은 곳을 찾아드려요.</div>
 
     <div class="fields-grid">
       <div class="field">
@@ -250,14 +282,21 @@ _PAGE_HTML = """<!doctype html>
         <div class="note">ex. 서울, 부산, 강남구 등</div>
       </div>
       <div class="field">
-        <label>키워드</label>
-        <input id="keyword" type="text">
-        <div class="note">ex. 한식 맛집, 새로오픈한맛집 등</div>
+        <label>검색키워드</label>
+        <input id="searchKeyword" type="text">
+        <div class="note">*(선택)상품군/브랜드 등 원하는 내용을 입력할 수 있습니다. ex. 평양냉면, 파스타, 한정식 등</div>
       </div>
-      <div class="field">
-        <label>브랜드</label>
-        <input id="brand" type="text">
-        <div class="note">ex. 스타벅스, 교촌치킨 등 (특정 브랜드만 찾을 때)</div>
+      <div class="field field-wide">
+        <label>필터</label>
+        <div class="filter-pills">
+          <button type="button" class="pill" data-value="미쉐린">미쉐린</button>
+          <button type="button" class="pill" data-value="새로오픈한 맛집">새로오픈한 맛집</button>
+          <button type="button" class="pill" data-value="많이찾는 맛집">많이찾는 맛집</button>
+          <button type="button" class="pill" data-value="리뷰많은 맛집">리뷰많은 맛집</button>
+          <button type="button" class="pill" data-value="현대백화점">현대백화점</button>
+          <button type="button" class="pill" data-value="신세계백화점">신세계백화점</button>
+        </div>
+        <div class="note">*(선택)네이버 지도 검색시 사용되는 필터입니다. 선택시 해당 필터가 적용된 결과값이 도출됩니다.</div>
       </div>
       <div class="field">
         <label>기준리뷰수</label>
@@ -298,9 +337,9 @@ _PAGE_HTML = """<!doctype html>
 
 <script>
   const districtEl = document.getElementById("district");
-  const keywordEl = document.getElementById("keyword");
-  const brandEl = document.getElementById("brand");
+  const searchKeywordEl = document.getElementById("searchKeyword");
   const minReviewsEl = document.getElementById("minReviews");
+  const pillEls = document.querySelectorAll(".pill");
   const runBtn = document.getElementById("runBtn");
   const stopBtn = document.getElementById("stopBtn");
   const logEl = document.getElementById("log");
@@ -352,12 +391,16 @@ _PAGE_HTML = """<!doctype html>
     }).catch(() => {});
   }
 
+  pillEls.forEach(btn => {
+    btn.addEventListener("click", () => btn.classList.toggle("active"));
+  });
+
   runBtn.addEventListener("click", () => {
     const district = districtEl.value.trim();
-    const keyword = keywordEl.value.trim();
-    const brand = brandEl.value.trim();
-    if (!district && !keyword && !brand) {
-      alert("희망지역 / 키워드 / 브랜드 중 하나는 입력해주세요.");
+    const searchKeyword = searchKeywordEl.value.trim();
+    const filters = Array.from(document.querySelectorAll(".pill.active")).map(b => b.dataset.value);
+    if (!district && filters.length === 0 && !searchKeyword) {
+      alert("희망지역 / 필터 / 검색키워드 중 하나는 입력해주세요.");
       return;
     }
     shownDone = false;
@@ -369,8 +412,8 @@ _PAGE_HTML = """<!doctype html>
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         district: district,
-        groups: keyword,
-        brand: brand,
+        groups: filters.join(","),
+        brand: searchKeyword,
         min_reviews: minReviewsEl.value.trim(),
       }),
     }).then(r => r.json()).then(data => {
@@ -453,7 +496,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             brand = (payload.get("brand") or "").strip()
             min_reviews_raw = (payload.get("min_reviews") or "").strip()
             if not district and not groups_text and not brand:
-                self._send_json({"ok": False, "error": "희망지역 / 키워드 / 브랜드 중 하나는 입력해주세요."})
+                self._send_json({"ok": False, "error": "희망지역 / 필터 / 검색키워드 중 하나는 입력해주세요."})
                 return
             try:
                 min_reviews = int(min_reviews_raw.replace(",", "")) if min_reviews_raw else 0
