@@ -407,13 +407,17 @@ _PAGE_HTML = """<!doctype html>
     resultsEl.style.display = "none";
     logEl.textContent = "";
 
+    // 필터와 검색키워드는 따로따로 검색하는 게 아니라, 네이버 지도에 실제로
+    // 입력하듯이 하나로 합친 검색어로 검색한다 (예: "서울 미쉐린 파스타").
+    const combinedKeyword = [...filters, searchKeyword].filter(Boolean).join(" ");
+
     fetch("/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         district: district,
-        groups: filters.join(","),
-        brand: searchKeyword,
+        groups: combinedKeyword,
+        brand: "",
         min_reviews: minReviewsEl.value.trim(),
       }),
     }).then(r => r.json()).then(data => {
