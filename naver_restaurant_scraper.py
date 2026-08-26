@@ -138,9 +138,18 @@ _STRUCTURAL_EXACT_LINES = {
     "휠체어 출입 가능",
 }
 
-# '서울 마포구 합정동'처럼 지역명만 딱 나오는 주소 줄 (리뷰가 아니라 주소다).
+# 카드가 아직 다 로딩되기 전에 읽으면, 진짜 가게 이름 대신 이런 배지/상태 문구가
+# 첫 줄(=가게 이름 자리)에 그대로 잡히는 경우가 있다. 이런 걸 가게 이름으로
+# 잘못 쓰면, 같은 가게가 서로 다른 '이름'으로 여러 번 중복 수집되는 문제가
+# 생긴다 (예: 진짜 이름으로 한 번, '플레이스 플러스'로 한 번 더).
+_INVALID_NAME_EXACT = _STRUCTURAL_EXACT_LINES | {"새로 오픈했어요"}
+
+# '서울 마포구 합정동'처럼 지역명이 나오는 주소 줄 (리뷰가 아니라 주소다).
+# 이름/카테고리 뒤에 구분자 없이 바로 붙어 나오는 경우도 있어서('한식서울 송파구
+# 오금동'처럼), 줄 맨 앞이 아니라 줄 안 어디에 있어도(단, 줄 맨 끝에서 끝나면)
+# 찾아서 걸러낸다.
 _ADDRESS_LINE_RE = re.compile(
-    r"^(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)"
+    r"(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)"
     r"\S*\s+\S+(시|군|구)\s+\S+(동|읍|면|가|리)$"
 )
 
@@ -174,7 +183,7 @@ def _extract_review_snippet(lines):
             continue
         if l in _STRUCTURAL_EXACT_LINES:
             continue
-        if _ADDRESS_LINE_RE.match(l) or _DISTANCE_LINE_RE.match(l):
+        if _ADDRESS_LINE_RE.search(l) or _DISTANCE_LINE_RE.match(l):
             continue
         candidates.append(l)
 
@@ -213,7 +222,7 @@ def _parse_list_item(text):
         return None
 
     name = _strip_trailing_badges(lines[0])
-    if not name:
+    if not name or name in _INVALID_NAME_EXACT:
         return None
 
     return {
@@ -473,7 +482,7 @@ def _current_list_rows(page, search_frame, min_reviews, visited, stop_event=_NO_
         if not lines:
             continue
         name_guess = _strip_trailing_badges(lines[0])
-        if not name_guess or name_guess in visited:
+        if not name_guess or name_guess in visited or name_guess in _INVALID_NAME_EXACT:
             continue
 
         review_count = _parse_review_count(text)
