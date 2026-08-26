@@ -251,8 +251,12 @@ def _extract_address(body_text):
 def _parse_ai_briefing(text, max_items=2):
     """'AI 브리핑' 라벨 아래에 나오는 요약 문장을 최대 max_items개까지 가져온다.
 
-    각 요약 문장 끝에는 보통 '닉네임 +2' 같은 출처 표시가 붙는데,
-    그 표시를 기준으로 문장 단위를 나눈다.
+    각 요약 문장 뒤에는 그 출처가 되는 리뷰어 닉네임이 줄 하나를 차지하며 나오고,
+    같은 의견을 낸 다른 리뷰어가 더 있으면 그 다음 줄에 '+숫자'가 따로 붙는다
+    (예: '...제공합니다.\\n푸드Man\\n+2\\n'). 출처가 리뷰 하나뿐이면 '+숫자' 없이
+    닉네임 줄만 나온다 (예: '...전문점입니다.\\n하루의 숲\\n특히...'). 그래서 '+숫자'만
+    구분자로 삼으면 이런 단독 출처의 닉네임이 다음 문장에 그대로 섞여버린다 -
+    닉네임으로 보이는 줄(문장부호로 안 끝나는 짧은 줄) 자체를 경계로 삼는다.
     """
     match = re.search(r"AI\s*브리핑", text)
     if not match:
@@ -269,13 +273,34 @@ def _parse_ai_briefing(text, max_items=2):
     if first_sentence and ("요약" in first_sentence.group(1) or "정리" in first_sentence.group(1)):
         section = section[first_sentence.end():]
 
-    # 각 요약 문장은 보통 끝에 '닉네임 +숫자' 형태의 출처 표시가 붙는다.
-    bullets = re.findall(r"(.+?)\s*\S+\s*\+\d+", section, flags=re.S)
-    bullets = [b.replace("\n", " ").strip() for b in bullets if b.strip()]
+    # 줄 단위로 훑으면서 리뷰어 닉네임으로 보이는 줄(문장부호로 안 끝나는 짧은
+    # 줄)을 경계로 삼아 문장을 나눈다. '+숫자'만 있는 줄은 그냥 건너뛴다
+    # (바로 앞의 닉네임 줄에서 이미 경계 처리가 됐으므로).
+    lines = [l.strip() for l in section.split("\n") if l.strip()]
+    name_line_re = re.compile(r"^\S+(\s+\S+){0,2}$")
+    count_line_re = re.compile(r"^\+\d+$")
 
-    if not bullets:
-        # 출처 표시를 못 찾으면, 줄바꿈 기준으로 대충이라도 나눠본다
-        bullets = [b.strip() for b in section.split("\n") if b.strip()]
+    bullets = []
+    current = []
+    for line in lines:
+        if line.startswith("출처") and "전체보기" in line:
+            break  # 요약 문장은 여기까지 - 이후는 리뷰 원문 목록이다
+        if count_line_re.match(line):
+            continue
+        is_name_line = (
+            len(line) <= 20
+            and not re.search(r"[.!?…。]$", line)
+            and name_line_re.match(line)
+        )
+        if is_name_line:
+            if current:
+                bullets.append(" ".join(current).strip())
+                current = []
+            continue
+        current.append(line)
+    if current:
+        bullets.append(" ".join(current).strip())
+    bullets = [b for b in bullets if b]
 
     if not bullets:
         return None, debug_context
